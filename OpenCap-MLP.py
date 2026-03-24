@@ -233,34 +233,43 @@ def run_analysis(sid, keyword, model_obj):
         with m_col3:
             # 展示总体风险判定
             st.markdown(f"### 风险判定: <span style='color:{overall_color};'>{overall_text}</span>", unsafe_allow_html=True)
+
         # --- SHAP 可视化 ---
         st.subheader("📊 关键动作特征贡献分析 (SHAP)")
         
+        # 1. 提取重要变量
         important_features = loaded_package['important_features']
         
-        # 💡 极速修复：在这里强制生成 input_sel，确保 SHAP 有正确的数据输入
+        # 2. 💡 核心修复：定义一个带“翻译”功能的预测函数
+        # 这样 SHAP 计算时的 E[f(x)] 和 f(x) 就会显示真实的应力值（如 2.5），而不是标准化后的负数
+        def custom_predict_real(data):
+            # 先进行标准化预测
+            scaled_preds = model.predict(data)
+            # 立即逆向转换回真实物理量纲
+            real_preds = scaler_y.inverse_transform(scaled_preds)
+            return real_preds
+
+        # 3. 准备标准化后的输入特征子集 (SHAP 计算需要标准化数据)
         input_scaled_df = pd.DataFrame(scaler_X.transform(input_df_raw), columns=scaler_X.feature_names_in_)
         input_sel = input_scaled_df[important_features]
 
-        explainer = shap.KernelExplainer(model.predict, background_data)
+        # 4. 初始化解释器：传入自定义的真实量纲预测函数
+        explainer = shap.KernelExplainer(custom_predict_real, background_data)
         shap_values_raw = explainer.shap_values(input_sel)
         
-        # 💡 终极兼容：处理不同版本 SHAP 返回的多输出数据结构差异
+        # 5. 兼容不同 SHAP 版本的多输出结构提取
         if isinstance(shap_values_raw, list):
-            # 传统 SHAP 行为：返回 List，每个目标一个二维数组 [ (1, features), (1, features) ]
             val_acl = shap_values_raw[0][0]
             val_kneeload = shap_values_raw[1][0]
         else:
-            # 新版 SHAP 行为：返回 3D 数组 (samples, features, outputs)
             if len(shap_values_raw.shape) == 3:
                 val_acl = shap_values_raw[0, :, 0]
                 val_kneeload = shap_values_raw[0, :, 1]
             else:
-                # 极端兜底情况
                 val_acl = shap_values_raw[0]
                 val_kneeload = shap_values_raw[0]
 
-        # 兼容 expected_value 的结构差异
+        # 6. 提取对应的基准值 (此时已自动变为真实单位)
         if isinstance(explainer.expected_value, (list, np.ndarray)) and len(explainer.expected_value) > 1:
             expected_val_acl = explainer.expected_value[0]
             expected_val_kneeload = explainer.expected_value[1]
@@ -268,10 +277,10 @@ def run_analysis(sid, keyword, model_obj):
             expected_val_acl = explainer.expected_value
             expected_val_kneeload = explainer.expected_value
             
-        # 提取真实物理角度用于图表展示
+        # 7. 提取真实物理角度用于图表左侧的标签展示
         input_raw_sel = input_df_raw[important_features].iloc[0].values
         
-        # 组装 ACL 的 Explanation 对象
+        # 8. 组装 Explanation 对象 (用于画瀑布图)
         exp_acl = shap.Explanation(
             values=val_acl,          
             base_values=expected_val_acl,           
@@ -279,7 +288,6 @@ def run_analysis(sid, keyword, model_obj):
             feature_names=important_features        
         )
         
-        # 组装 Knee-load 的 Explanation 对象
         exp_kneeload = shap.Explanation(
             values=val_kneeload,          
             base_values=expected_val_kneeload,
@@ -287,9 +295,11 @@ def run_analysis(sid, keyword, model_obj):
             feature_names=important_features
         )
 
+        # --- 开始渲染 UI 标签页 ---
         tab_acl, tab_kneeload = st.tabs(["🦵 ACL SHAP 解释图", "🏋️‍♂️ knee-load SHAP 解释图"])
+
         def draw_shap_plots(exp_obj, exp_val, target_name):
-            st.markdown(f"**{target_name} - 瀑布图 (Waterfall):** 展示各特征对基准值的累加贡献")
+            st.markdown(f"**{target_name} - 瀑布图 (Waterfall):** 展示各特征对基准值的累加贡献 (单位: 真实量纲)")
             fig_wf, ax_wf = plt.subplots(figsize=(10, 6))
             shap.plots.waterfall(exp_obj, max_display=10, show=False)
             plt.tight_layout()
@@ -301,7 +311,7 @@ def run_analysis(sid, keyword, model_obj):
             shap.force_plot(
                 exp_val, 
                 exp_obj.values, 
-                input_df_raw.iloc[0,:], 
+                pd.Series(exp_obj.data, index=exp_obj.feature_names), 
                 matplotlib=True, 
                 show=False,
                 plot_cmap=["#ff0051", "#008bfb"]
@@ -313,12 +323,13 @@ def run_analysis(sid, keyword, model_obj):
 
         with tab_kneeload:
             draw_shap_plots(exp_kneeload, expected_val_kneeload, "knee-load")
-       # --- 动态建议生成逻辑 ---
-      # 💡 修复 3：使用 exp_acl.values 生成基于 ACL 的改善建议
+
+        # --- 动态建议生成逻辑 ---
+        # 基于 ACL 的贡献值生成建议
         shap_df = pd.DataFrame({
-            'feature': feature_names,
-            'contribution': exp_acl.values,  # <--- 明确使用 ACL 的贡献值
-            'actual_value': feature_values   
+            'feature': important_features,
+            'contribution': exp_acl.values,  
+            'actual_value': input_raw_sel   
         })
         
         risk_factors = shap_df[shap_df['contribution'] > 0].sort_values(by='contribution', ascending=False)
@@ -329,6 +340,7 @@ def run_analysis(sid, keyword, model_obj):
             if not risk_factors.empty:
                 st.markdown("#### ⚠️ 高风险动作特征偏差分析 (实测值 vs 正常值)")
                 
+                # 哑铃图绘制逻辑
                 fig_db, ax_db = plt.subplots(figsize=(3.0, len(risk_factors) * 0.25 + 0.8), dpi=200)
                 y_labels = []
                 y_ticks = []
@@ -343,7 +355,6 @@ def run_analysis(sid, keyword, model_obj):
                     ax_db.scatter(normal_val, y, color='#008bfb', s=15, zorder=2, label='Normal Value' if idx==len(risk_factors)-1 else "")
                     ax_db.scatter(actual_val, y, color='#ff0051', s=15, zorder=2, label='Actual Risk' if idx==len(risk_factors)-1 else "")
                     
-                    left_val, right_val = min(actual_val, normal_val), max(actual_val, normal_val)
                     offset = max(abs(actual_val - normal_val) * 0.1, 0.5) 
                     
                     if actual_val < normal_val:
@@ -367,8 +378,6 @@ def run_analysis(sid, keyword, model_obj):
                 ax_db.spines['bottom'].set_color('#b2bec3')
                 ax_db.grid(axis='x', linestyle='--', alpha=0.5)
                 
-                x_min, x_max = ax_db.get_xlim()
-                ax_db.set_xlim(x_min - (x_max-x_min)*0.25, x_max + (x_max-x_min)*0.25)
                 ax_db.set_ylim(-1.0, len(risk_factors) + 0.7)
                 ax_db.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=2, frameon=False, fontsize=6)
                 
@@ -388,7 +397,7 @@ def run_analysis(sid, keyword, model_obj):
     except Exception as e:
         st.error(f"🚨 分析执行出错: {e}")
         st.code(traceback.format_exc())
-# ===================== 4. 运行逻辑 =====================
+
 # ===================== 4. 运行逻辑 =====================
 if st.button("🚀 开始自动化分析", use_container_width=True):
     if model_file is not None:
