@@ -234,32 +234,54 @@ def run_analysis(sid, keyword, model_obj):
             # 展示总体风险判定
             st.markdown(f"### 风险判定: <span style='color:{overall_color};'>{overall_text}</span>", unsafe_allow_html=True)
         # --- SHAP 可视化 ---
-        st.subheader("📊 关键动作特征贡献分析 (SHAP)")
+       st.subheader("📊 关键动作特征贡献分析 (SHAP)")
         
-        # 使用 KernelExplainer 计算 SHAP，注意传入的是标准化后的输入
         explainer = shap.KernelExplainer(model.predict, background_data)
-        shap_values_list = explainer.shap_values(input_scaled)
+        shap_values_raw = explainer.shap_values(input_sel)
         
-        expected_val_acl = explainer.expected_value[0]
-        expected_val_kneeload = explainer.expected_value[1]
+        # 💡 终极兼容：处理不同版本 SHAP 返回的多输出数据结构差异
+        if isinstance(shap_values_raw, list):
+            # 传统 SHAP 行为：返回 List，每个目标一个二维数组 [ (1, features), (1, features) ]
+            val_acl = shap_values_raw[0][0]
+            val_kneeload = shap_values_raw[1][0]
+        else:
+            # 新版 SHAP 行为：返回 3D 数组 (samples, features, outputs)
+            if len(shap_values_raw.shape) == 3:
+                val_acl = shap_values_raw[0, :, 0]
+                val_kneeload = shap_values_raw[0, :, 1]
+            else:
+                # 极端兜底情况
+                val_acl = shap_values_raw[0]
+                val_kneeload = shap_values_raw[0]
+
+        # 兼容 expected_value 的结构差异
+        if isinstance(explainer.expected_value, (list, np.ndarray)) and len(explainer.expected_value) > 1:
+            expected_val_acl = explainer.expected_value[0]
+            expected_val_kneeload = explainer.expected_value[1]
+        else:
+            expected_val_acl = explainer.expected_value
+            expected_val_kneeload = explainer.expected_value
+            
+        # 提取真实物理角度用于图表展示
+        input_raw_sel = input_df_raw[important_features].iloc[0].values
         
-        # 组装 Explanation 对象 (画图时让 data 保持原始物理量纲，方便用户阅读)
+        # 组装 ACL 的 Explanation 对象
         exp_acl = shap.Explanation(
-            values=shap_values_list[0][0],          
+            values=val_acl,          
             base_values=expected_val_acl,           
-            data=input_df_raw.iloc[0].values,       
-            feature_names=feature_names             
+            data=input_raw_sel,                     
+            feature_names=important_features        
         )
         
+        # 组装 Knee-load 的 Explanation 对象
         exp_kneeload = shap.Explanation(
-            values=shap_values_list[1][0],          
+            values=val_kneeload,          
             base_values=expected_val_kneeload,
-            data=input_df_raw.iloc[0].values,
-            feature_names=feature_names
+            data=input_raw_sel,
+            feature_names=important_features
         )
 
         tab_acl, tab_kneeload = st.tabs(["🦵 ACL SHAP 解释图", "🏋️‍♂️ knee-load SHAP 解释图"])
-
         def draw_shap_plots(exp_obj, exp_val, target_name):
             st.markdown(f"**{target_name} - 瀑布图 (Waterfall):** 展示各特征对基准值的累加贡献")
             fig_wf, ax_wf = plt.subplots(figsize=(10, 6))
