@@ -182,23 +182,33 @@ def run_analysis(sid, keyword, model_obj):
             ]
             features_array = np.array([feature_values])
             
+            # 1. 加载模型及核心变量
             loaded_package = joblib.load(model_obj)
             model = loaded_package['model']
             scaler_X = loaded_package['scaler_X']
             scaler_y = loaded_package['scaler_y']
             background_data = loaded_package['background_data']
+            important_features = loaded_package['important_features']
 
-            # 💡 修复 2：对输入特征进行标准化 (必须与训练时一致)
+            # 2. 💡 定义唯一的预测出口：输入原始特征 -> 输出真实物理力
+            def get_real_prediction(raw_features_df):
+                # 第一步：标准化特征
+                scaled_x = scaler_X.transform(raw_features_df)
+                scaled_x_df = pd.DataFrame(scaled_x, columns=scaler_X.feature_names_in_)
+                # 第二步：筛选核心特征
+                sel_x = scaled_x_df[important_features]
+                # 第三步：模型预测
+                pred_s = model.predict(sel_x)
+                # 第四步：逆向还原力值
+                return scaler_y.inverse_transform(pred_s)
+
+            # 3. 执行面板预测
+            # 这里的 input_df_raw 必须包含所有原始特征 [HFA, HAA, KFA, ADF, FPA, TFA]
             input_df_raw = pd.DataFrame(features_array, columns=feature_names)
-            input_scaled = scaler_X.transform(input_df_raw)
+            pred_real = get_real_prediction(input_df_raw)
             
-            # 使用标准化后的数据预测，并使用 scaler_y 逆转换回真实物理量纲
-            pred_scaled = model.predict(input_scaled)
-            pred_real = scaler_y.inverse_transform(pred_scaled)
-            
-            # 获取双输出的得分
-            score_acl = float(pred_real[0][0])
-            score_kneeload = float(pred_real[0][1])
+            score_acl = float(pred_real[0][0])      # 严格对应 targets[0]
+            score_kneeload = float(pred_real[0][1]) # 严格对应 targets[1]
             
             status.update(label="✅ 分析完成！", state="complete")
         # --- 结果展示面板 ---
@@ -237,63 +247,43 @@ def run_analysis(sid, keyword, model_obj):
         # --- SHAP 可视化 ---
         st.subheader("📊 关键动作特征贡献分析 (SHAP)")
         
-        # 1. 提取重要变量
-        important_features = loaded_package['important_features']
-        
-        # 2. 💡 核心修复：SHAP 的 KernelExplainer 对于多输出模型，
-        # 要求预测函数返回的格式必须非常标准。
-        def custom_predict_real(data):
-            scaled_preds = model.predict(data)
-            real_preds = scaler_y.inverse_transform(scaled_preds)
-            return real_preds
+        # 💡 SHAP 专用的预测包装 (因为 SHAP 内部会传标准化的 sel 数据，我们只需做 预测+还原)
+        def shap_predict_wrapper(scaled_sel_data):
+            p = model.predict(scaled_sel_data)
+            return scaler_y.inverse_transform(p)
 
-        # 3. 准备标准化后的输入特征子集
-        input_scaled_df = pd.DataFrame(scaler_X.transform(input_df_raw), columns=scaler_X.feature_names_in_)
-        input_sel = input_scaled_df[important_features]
+        # 准备 SHAP 输入
+        input_scaled_full = pd.DataFrame(scaler_X.transform(input_df_raw), columns=scaler_X.feature_names_in_)
+        input_sel_for_shap = input_scaled_full[important_features]
 
-        # 4. 初始化解释器
-        explainer = shap.KernelExplainer(custom_predict_real, background_data)
-        shap_values_raw = explainer.shap_values(input_sel)
+        explainer = shap.KernelExplainer(shap_predict_wrapper, background_data)
+        shap_values_raw = explainer.shap_values(input_sel_for_shap)
         
-        # 5. 💡 索引对齐修复：
-        # 如果 shap_values_raw 是列表，index 0 是第一个 target (ACL)，index 1 是第二个 (Knee-load)
+        # 5. 提取并对齐索引
         if isinstance(shap_values_raw, list):
-            # 确保这里没有拿反
             val_acl = shap_values_raw[0][0]      
             val_kneeload = shap_values_raw[1][0] 
         else:
-            # 如果返回的是 3D Array [样本, 特征, 输出]
-            if len(shap_values_raw.shape) == 3:
-                val_acl = shap_values_raw[0, :, 0]
-                val_kneeload = shap_values_raw[0, :, 1]
-            else:
-                val_acl = shap_values_raw[0]
-                val_kneeload = shap_values_raw[0]
+            # 3D Array 模式 [样本, 特征, 输出]
+            val_acl = shap_values_raw[0, :, 0]
+            val_kneeload = shap_values_raw[0, :, 1]
 
-        # 6. 基准值提取对齐
-        if isinstance(explainer.expected_value, (list, np.ndarray)):
+        # 6. 基准值对齐
+        if isinstance(explainer.expected_value, (list, np.ndarray)) and len(explainer.expected_value) > 1:
             expected_val_acl = explainer.expected_value[0]
             expected_val_kneeload = explainer.expected_value[1]
         else:
             expected_val_acl = explainer.expected_value
             expected_val_kneeload = explainer.expected_value
             
-        # 7. 提取真实物理角度用于图表展示
+        # 7. 组装数据
         input_raw_sel = input_df_raw[important_features].iloc[0].values
         
-        # 8. 组装 Explanation 对象
         exp_acl = shap.Explanation(
-            values=val_acl,          
-            base_values=expected_val_acl,           
-            data=input_raw_sel,                     
-            feature_names=important_features        
+            values=val_acl, base_values=expected_val_acl, data=input_raw_sel, feature_names=important_features
         )
-        
         exp_kneeload = shap.Explanation(
-            values=val_kneeload,          
-            base_values=expected_val_kneeload,
-            data=input_raw_sel,
-            feature_names=important_features
+            values=val_kneeload, base_values=expected_val_kneeload, data=input_raw_sel, feature_names=important_features
         )
 
         # --- 开始渲染 UI 标签页 ---
