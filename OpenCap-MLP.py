@@ -295,7 +295,7 @@ def run_analysis(sid, keyword, model_obj):
         )
 
         # --- 开始渲染 UI 标签页 ---
-        tab_acl, tab_kneeload = st.tabs(["🦵 ACL SHAP 解释图", "🏋️‍♂️ knee-load SHAP 解释图"])
+        tab_acl, tab_kneeload = st.tabs(["🦵 ACL SHAP 解释图", "🏋️‍♂️ 膝关节总接触力 SHAP 解释图"])
 
         def draw_shap_plots(exp_obj, exp_val, target_name):
             st.markdown(f"**{target_name} - 瀑布图 (Waterfall):** 展示各特征对基准值的累加贡献 (单位: 真实量纲)")
