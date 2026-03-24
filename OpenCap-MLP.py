@@ -228,21 +228,29 @@ def run_analysis(sid, keyword, model_obj):
         overall_color = "#d63031" if is_overall_risk else "#27ae60"
 
         # 调整为 3 列，展示指标的同时加上超标警告小标签
-        m_col1, m_col2, m_col3 = st.columns(3)
+        m_col1, m_col2 = st.columns(2)
         
         with m_col1:
-            # 如果 ACL 超标，显示红色的向上箭头
             acl_warning = "<span style='color:#d63031; font-size:22px; font-weight:bold;'> ▲</span>" if is_acl_risk else ""
             st.markdown(f"### ACL 应力值（×BW）: <span style='color:#2d3436;'>{score_acl:.2f}</span>{acl_warning}", unsafe_allow_html=True)
             
         with m_col2:
-            # 如果 Knee-load 超标，显示红色的向上箭头
             knee_warning = "<span style='color:#d63031; font-size:22px; font-weight:bold;'> ▲</span>" if is_knee_risk else ""
             st.markdown(f"### 膝关节总接触力: <span style='color:#2d3436;'>{score_kneeload:.2f}</span>{knee_warning}", unsafe_allow_html=True)
-            
-        with m_col3:
-            # 展示总体风险判定
-            st.markdown(f"### 风险判定: <span style='color:{overall_color};'>{overall_text}</span>", unsafe_allow_html=True)
+
+        # 换行：展示总体风险判定 (占据整行宽度)
+        st.write("") # 加一点微小的间距
+        
+        # 使用 st.markdown 配合简单的背景色，让风险判定更醒目
+        bg_color = "rgba(214, 48, 49, 0.1)" if is_overall_risk else "rgba(39, 174, 96, 0.1)"
+        st.markdown(
+            f"""
+            <div style="background-color:{bg_color}; padding:15px; border-radius:10px; border-left: 5px solid {overall_color};">
+                <h2 style="color:{overall_color}; margin:0; padding:0;">风险判定：{overall_text}</h2>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
 
         # --- SHAP 可视化 ---
         st.subheader("📊 关键动作特征贡献分析 (SHAP)")
