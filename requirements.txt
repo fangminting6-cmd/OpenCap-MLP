@@ -1,0 +1,12 @@
+streamlit
+requests
+joblib
+numpy
+pandas
+matplotlib>=3.7.0
+scikit-learn
+shap
+xgboost
+imbalanced-learn
+python-decouple
+maskpass
