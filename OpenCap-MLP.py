@@ -202,20 +202,37 @@ def run_analysis(sid, keyword, model_obj):
             
             status.update(label="✅ 分析完成！", state="complete")
         # --- 结果展示面板 ---
-        st.divider()
-        is_high_risk = score >= 2.45
-        risk_text = "高风险" if is_high_risk else "低风险"
-        risk_color = "#d63031" if is_high_risk else "#27ae60"
+       st.divider()
+        
+        # 💡 1. 设定两个指标的高风险阈值 (请根据你的实验标准修改下面的数字)
+        ACL_THRESHOLD = 2.45
+        KNEE_LOAD_THRESHOLD = 3.0  # <--- ⚠️ 请把 3.0 改为你判定 knee-load 高风险的实际标准
+        
+        # 💡 2. 分别判断两个指标是否超标
+        is_acl_risk = score_acl >= ACL_THRESHOLD
+        is_knee_risk = score_kneeload >= KNEE_LOAD_THRESHOLD
+        
+        # 💡 3. 总体风险判定：只要有一个指标超标，总体动作就判定为“高风险”
+        is_overall_risk = is_acl_risk or is_knee_risk
+        overall_text = "🚨 总体高风险" if is_overall_risk else "✅ 总体低风险"
+        overall_color = "#d63031" if is_overall_risk else "#27ae60"
 
-        m_col1, m_col2 = st.columns(2)
-       # 调整为 3 列，同时展示两个指标
+        # 调整为 3 列，展示指标的同时加上超标警告小标签
         m_col1, m_col2, m_col3 = st.columns(3)
+        
         with m_col1:
-            st.markdown(f"### ACL 应力: <span style='color:#2d3436;'>{score_acl:.2f}</span>", unsafe_allow_html=True)
+            # 如果 ACL 超标，显示红色的 [超标] 警告
+            acl_warning = "<span style='color:#d63031; font-size:18px; font-weight:bold;'> (超标)</span>" if is_acl_risk else ""
+            st.markdown(f"### ACL 应力: <span style='color:#2d3436;'>{score_acl:.2f}</span>{acl_warning}", unsafe_allow_html=True)
+            
         with m_col2:
-            st.markdown(f"### Knee Load: <span style='color:#2d3436;'>{score_kneeload:.2f}</span>", unsafe_allow_html=True)
+            # 如果 Knee-load 超标，显示红色的 [超标] 警告
+            knee_warning = "<span style='color:#d63031; font-size:18px; font-weight:bold;'> (超标)</span>" if is_knee_risk else ""
+            st.markdown(f"### Knee Load: <span style='color:#2d3436;'>{score_kneeload:.2f}</span>{knee_warning}", unsafe_allow_html=True)
+            
         with m_col3:
-            st.markdown(f"### 风险判定: <span style='color:{risk_color};'>{risk_text}</span>", unsafe_allow_html=True)
+            # 展示总体风险判定
+            st.markdown(f"### 风险判定: <span style='color:{overall_color};'>{overall_text}</span>", unsafe_allow_html=True)
         # --- SHAP 可视化 ---
         st.subheader("📊 关键动作特征贡献分析 (SHAP)")
         
