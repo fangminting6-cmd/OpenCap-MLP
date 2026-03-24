@@ -12,7 +12,7 @@ import traceback
 import streamlit as st
 
 # ===================== 0. 全局配置 =====================
-DEFAULT_MODEL_NAME = "final_XGJ_model.pkl"  # <--- 新增：定义仓库里的模型文件名
+DEFAULT_MODEL_NAME = "final_MLP_multioutput_model.pkl"  # <--- 新增：定义仓库里的模型文件名
 # ===================== 0. 全局配置 (新加) =====================
 ADVICE_MAP = {
     "HFA": (
@@ -182,11 +182,25 @@ def run_analysis(sid, keyword, model_obj):
             ]
             features_array = np.array([feature_values])
             
-            st.write("正在加载模型并进行风险预测...")
-            model = joblib.load(model_obj)
-            score = float(np.asarray(model.predict(features_array)).ravel()[0])
-            status.update(label="✅ 分析完成！", state="complete")
+           loaded_package = joblib.load(model_obj)
+            model = loaded_package['model']
+            scaler_X = loaded_package['scaler_X']
+            scaler_y = loaded_package['scaler_y']
+            background_data = loaded_package['background_data']
 
+            # 💡 修复 2：对输入特征进行标准化 (必须与训练时一致)
+            input_df_raw = pd.DataFrame(features_array, columns=feature_names)
+            input_scaled = scaler_X.transform(input_df_raw)
+            
+            # 使用标准化后的数据预测，并使用 scaler_y 逆转换回真实物理量纲
+            pred_scaled = model.predict(input_scaled)
+            pred_real = scaler_y.inverse_transform(pred_scaled)
+            
+            # 获取双输出的得分
+            score_acl = float(pred_real[0][0])
+            score_kneeload = float(pred_real[0][1])
+            
+            status.update(label="✅ 分析完成！", state="complete")
         # --- 结果展示面板 ---
         st.divider()
         is_high_risk = score >= 2.45
@@ -194,52 +208,41 @@ def run_analysis(sid, keyword, model_obj):
         risk_color = "#d63031" if is_high_risk else "#27ae60"
 
         m_col1, m_col2 = st.columns(2)
+       # 调整为 3 列，同时展示两个指标
+        m_col1, m_col2, m_col3 = st.columns(3)
         with m_col1:
-    # 模仿 m_col2 的 H3 排版，将标签与数值并列
-            st.markdown(f"### ACL 应力值 (×BW): <span style='color:#2d3436; margin-left:10px;'>{score:.2f}</span>", unsafe_allow_html=True)
+            st.markdown(f"### ACL 应力: <span style='color:#2d3436;'>{score_acl:.2f}</span>", unsafe_allow_html=True)
         with m_col2:
+            st.markdown(f"### Knee Load: <span style='color:#2d3436;'>{score_kneeload:.2f}</span>", unsafe_allow_html=True)
+        with m_col3:
             st.markdown(f"### 风险判定: <span style='color:{risk_color};'>{risk_text}</span>", unsafe_allow_html=True)
-
         # --- SHAP 可视化 ---
         st.subheader("📊 关键动作特征贡献分析 (SHAP)")
         
-        # 1. 提取打包好的模型和背景数据
-        # (假设你在前面已经 loaded_package = joblib.load(model_file))
-        # model = loaded_package['model']
-        # background_data = loaded_package['background_data']
-        
-        input_df = pd.DataFrame(features_array, columns=feature_names).round(1)
-        
-        # 2. 💡 使用适用于 MLP 的 KernelExplainer
+        # 使用 KernelExplainer 计算 SHAP，注意传入的是标准化后的输入
         explainer = shap.KernelExplainer(model.predict, background_data)
+        shap_values_list = explainer.shap_values(input_scaled)
         
-        # 计算 SHAP 值 (注意：KernelExplainer 会有进度条，在 Streamlit 中可能会在终端打印)
-        shap_values_list = explainer.shap_values(input_df)
-        
-        # 3. 💡 KernelExplainer 多输出时返回的是一个 List: [ACL的数组, knee-load的数组]
-        # 获取预期的基准值 (Base Value)
         expected_val_acl = explainer.expected_value[0]
         expected_val_kneeload = explainer.expected_value[1]
         
-        # 4. 💡 手动构建 Explanation 对象，因为 waterfall 图必须用这个对象
+        # 组装 Explanation 对象 (画图时让 data 保持原始物理量纲，方便用户阅读)
         exp_acl = shap.Explanation(
-            values=shap_values_list[0][0],          # 第0个目标的第0行样本的shap值
-            base_values=expected_val_acl,           # 基准值
-            data=input_df.iloc[0].values,           # 原始特征值
-            feature_names=feature_names             # 特征名称
+            values=shap_values_list[0][0],          
+            base_values=expected_val_acl,           
+            data=input_df_raw.iloc[0].values,       
+            feature_names=feature_names             
         )
         
         exp_kneeload = shap.Explanation(
             values=shap_values_list[1][0],          
             base_values=expected_val_kneeload,
-            data=input_df.iloc[0].values,
+            data=input_df_raw.iloc[0].values,
             feature_names=feature_names
         )
 
-        # 创建两个按预测标签分类的标签页
         tab_acl, tab_kneeload = st.tabs(["🦵 ACL SHAP 解释图", "🏋️‍♂️ knee-load SHAP 解释图"])
 
-        # 定义内部绘图函数
         def draw_shap_plots(exp_obj, exp_val, target_name):
             st.markdown(f"**{target_name} - 瀑布图 (Waterfall):** 展示各特征对基准值的累加贡献")
             fig_wf, ax_wf = plt.subplots(figsize=(10, 6))
@@ -253,41 +256,35 @@ def run_analysis(sid, keyword, model_obj):
             shap.force_plot(
                 exp_val, 
                 exp_obj.values, 
-                input_df.iloc[0,:], 
+                input_df_raw.iloc[0,:], 
                 matplotlib=True, 
                 show=False,
                 plot_cmap=["#ff0051", "#008bfb"]
             )
             st.pyplot(plt.gcf(), clear_figure=True)
 
-        # 渲染 ACL 标签页
         with tab_acl:
             draw_shap_plots(exp_acl, expected_val_acl, "ACL")
 
-        # 渲染 knee-load 标签页
         with tab_kneeload:
             draw_shap_plots(exp_kneeload, expected_val_kneeload, "knee-load")
        # --- 动态建议生成逻辑 ---
-        # 获取所有特征名和对应的 SHAP 值
+      # 💡 修复 3：使用 exp_acl.values 生成基于 ACL 的改善建议
         shap_df = pd.DataFrame({
             'feature': feature_names,
-            'contribution': exp.values,
-            'actual_value': feature_values  # 
+            'contribution': exp_acl.values,  # <--- 明确使用 ACL 的贡献值
+            'actual_value': feature_values   
         })
         
-        # 筛选出贡献值为正（即增加风险）的特征，并按贡献度从大到小排序
         risk_factors = shap_df[shap_df['contribution'] > 0].sort_values(by='contribution', ascending=False)
 
-        with st.expander("📋 针对性动作改善建议", expanded=True):
+        with st.expander("📋 针对性动作改善建议 (基于 ACL 风险)", expanded=True):
             st.markdown(f"**分析对象**: `{trial_id}`  |  **触地瞬间 (IC)**: 第 {ic_idx+1} 帧")
             
             if not risk_factors.empty:
                 st.markdown("#### ⚠️ 高风险动作特征偏差分析 (实测值 vs 正常值)")
                 
-                # --- 开始绘制哑铃图 ---
-                # 根据高风险特征数量动态调整图表高度
                 fig_db, ax_db = plt.subplots(figsize=(3.0, len(risk_factors) * 0.25 + 0.8), dpi=200)
-                
                 y_labels = []
                 y_ticks = []
                 
@@ -297,17 +294,13 @@ def run_analysis(sid, keyword, model_obj):
                     normal_val = NORMAL_VALUES.get(f_name, 0)
                     y = idx
                     
-                    # 连线
                     ax_db.plot([actual_val, normal_val], [y, y], color='#dcdde1', zorder=1, lw=1)
-                    
-                    # 极小圆点
                     ax_db.scatter(normal_val, y, color='#008bfb', s=15, zorder=2, label='Normal Value' if idx==len(risk_factors)-1 else "")
                     ax_db.scatter(actual_val, y, color='#ff0051', s=15, zorder=2, label='Actual Risk' if idx==len(risk_factors)-1 else "")
                     
                     left_val, right_val = min(actual_val, normal_val), max(actual_val, normal_val)
                     offset = max(abs(actual_val - normal_val) * 0.1, 0.5) 
                     
-                    # 极限小字体
                     if actual_val < normal_val:
                         ax_db.text(actual_val - offset, y, f"{actual_val:.1f}", va='center', ha='right', fontsize=6, color='#ff0051', fontweight='bold')
                         ax_db.text(normal_val + offset, y, f"{normal_val:.1f}", va='center', ha='left', fontsize=6, color='#008bfb')
@@ -318,33 +311,24 @@ def run_analysis(sid, keyword, model_obj):
                     y_labels.append(f_name)
                     y_ticks.append(y)
                 
-                # 设置Y轴和X轴
                 ax_db.set_yticks(y_ticks)
                 ax_db.set_yticklabels(y_labels, fontsize=7, fontweight='bold', color='#2d3436')
                 ax_db.set_xlabel("Angle (Degree)", fontsize=7, color='#636e72')
                 ax_db.tick_params(axis='x', labelsize=6)
                 
-                # 美化图表
                 ax_db.spines['top'].set_visible(False)
                 ax_db.spines['right'].set_visible(False)
                 ax_db.spines['left'].set_visible(False)
                 ax_db.spines['bottom'].set_color('#b2bec3')
                 ax_db.grid(axis='x', linestyle='--', alpha=0.5)
                 
-                # 两侧留白
                 x_min, x_max = ax_db.get_xlim()
                 ax_db.set_xlim(x_min - (x_max-x_min)*0.25, x_max + (x_max-x_min)*0.25)
-                
-                # 【修改点 1】：把上限从 len(risk_factors) 改成 len(risk_factors) + 0.5
-                # 这样会把图表内部的“天花板”再往上抬高一截，给最上面的 ADF 留出更多呼吸空间
                 ax_db.set_ylim(-1.0, len(risk_factors) + 0.7)
-                
-                # 【修改点 2】：把图例的高度位置从 1.15 调高到 1.25 或 1.3
                 ax_db.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=2, frameon=False, fontsize=6)
                 
                 plt.tight_layout()
                 st.pyplot(fig_db, clear_figure=True, use_container_width=False)
-                # --- 哑铃图绘制结束 ---
 
                 st.markdown("#### 🎯 动作处方：")
                 for _, row in risk_factors.iterrows():
@@ -357,23 +341,17 @@ def run_analysis(sid, keyword, model_obj):
             st.markdown("---")
 
     except Exception as e:
-
         st.error(f"🚨 分析执行出错: {e}")
-
         st.code(traceback.format_exc())
-
+# ===================== 4. 运行逻辑 =====================
 # ===================== 4. 运行逻辑 =====================
 if st.button("🚀 开始自动化分析", use_container_width=True):
-    # 逻辑点：判断使用哪个模型源
     if model_file is not None:
-        # 如果用户上传了，用上传的
         run_analysis(session_id, trial_keyword, model_file)
     elif os.path.exists(DEFAULT_MODEL_NAME):
-        # 如果没上传，但在仓库里找到了默认模型，用默认的
         run_analysis(session_id, trial_keyword, DEFAULT_MODEL_NAME)
     else:
-        # 如果两个都没有，再报错
         st.error(f"⚠️ 找不到模型文件！请上传 .pkl 文件或确保仓库中存在 {DEFAULT_MODEL_NAME}")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Powered by OpenCap & XGBoost Model")
+st.sidebar.caption("Powered by OpenCap & MLP Model")
