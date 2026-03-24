@@ -230,7 +230,7 @@ def run_analysis(sid, keyword, model_obj):
         # 调整为 3 列，展示指标的同时加上超标警告小标签
         m_col1, m_col2, m_col3 = st.columns(3)
         
-       with m_col1:
+        with m_col1:
             # 如果 ACL 超标，显示红色的向上箭头
             acl_warning = "<span style='color:#d63031; font-size:22px; font-weight:bold;'> ▲</span>" if is_acl_risk else ""
             st.markdown(f"### ACL 应力值（×BW）: <span style='color:#2d3436;'>{score_acl:.2f}</span>{acl_warning}", unsafe_allow_html=True)
