@@ -202,7 +202,7 @@ def run_analysis(sid, keyword, model_obj):
             
             status.update(label="✅ 分析完成！", state="complete")
         # --- 结果展示面板 ---
-       st.divider()
+        st.divider()
         
         # 💡 1. 设定两个指标的高风险阈值 (请根据你的实验标准修改下面的数字)
         ACL_THRESHOLD = 2.45
