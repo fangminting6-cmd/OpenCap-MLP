@@ -240,28 +240,29 @@ def run_analysis(sid, keyword, model_obj):
         # 1. 提取重要变量
         important_features = loaded_package['important_features']
         
-        # 2. 💡 核心修复：定义一个带“翻译”功能的预测函数
-        # 这样 SHAP 计算时的 E[f(x)] 和 f(x) 就会显示真实的应力值（如 2.5），而不是标准化后的负数
+        # 2. 💡 核心修复：SHAP 的 KernelExplainer 对于多输出模型，
+        # 要求预测函数返回的格式必须非常标准。
         def custom_predict_real(data):
-            # 先进行标准化预测
             scaled_preds = model.predict(data)
-            # 立即逆向转换回真实物理量纲
             real_preds = scaler_y.inverse_transform(scaled_preds)
             return real_preds
 
-        # 3. 准备标准化后的输入特征子集 (SHAP 计算需要标准化数据)
+        # 3. 准备标准化后的输入特征子集
         input_scaled_df = pd.DataFrame(scaler_X.transform(input_df_raw), columns=scaler_X.feature_names_in_)
         input_sel = input_scaled_df[important_features]
 
-        # 4. 初始化解释器：传入自定义的真实量纲预测函数
+        # 4. 初始化解释器
         explainer = shap.KernelExplainer(custom_predict_real, background_data)
         shap_values_raw = explainer.shap_values(input_sel)
         
-        # 5. 兼容不同 SHAP 版本的多输出结构提取
+        # 5. 💡 索引对齐修复：
+        # 如果 shap_values_raw 是列表，index 0 是第一个 target (ACL)，index 1 是第二个 (Knee-load)
         if isinstance(shap_values_raw, list):
-            val_acl = shap_values_raw[0][0]
-            val_kneeload = shap_values_raw[1][0]
+            # 确保这里没有拿反
+            val_acl = shap_values_raw[0][0]      
+            val_kneeload = shap_values_raw[1][0] 
         else:
+            # 如果返回的是 3D Array [样本, 特征, 输出]
             if len(shap_values_raw.shape) == 3:
                 val_acl = shap_values_raw[0, :, 0]
                 val_kneeload = shap_values_raw[0, :, 1]
@@ -269,18 +270,18 @@ def run_analysis(sid, keyword, model_obj):
                 val_acl = shap_values_raw[0]
                 val_kneeload = shap_values_raw[0]
 
-        # 6. 提取对应的基准值 (此时已自动变为真实单位)
-        if isinstance(explainer.expected_value, (list, np.ndarray)) and len(explainer.expected_value) > 1:
+        # 6. 基准值提取对齐
+        if isinstance(explainer.expected_value, (list, np.ndarray)):
             expected_val_acl = explainer.expected_value[0]
             expected_val_kneeload = explainer.expected_value[1]
         else:
             expected_val_acl = explainer.expected_value
             expected_val_kneeload = explainer.expected_value
             
-        # 7. 提取真实物理角度用于图表左侧的标签展示
+        # 7. 提取真实物理角度用于图表展示
         input_raw_sel = input_df_raw[important_features].iloc[0].values
         
-        # 8. 组装 Explanation 对象 (用于画瀑布图)
+        # 8. 组装 Explanation 对象
         exp_acl = shap.Explanation(
             values=val_acl,          
             base_values=expected_val_acl,           
