@@ -236,9 +236,12 @@ def run_analysis(sid, keyword, model_obj):
         # --- SHAP 可视化 ---
         st.subheader("📊 关键动作特征贡献分析 (SHAP)")
         
+        important_features = loaded_package['important_features']
+        
+        # 💡 极速修复：在这里强制生成 input_sel，确保 SHAP 有正确的数据输入
         input_scaled_df = pd.DataFrame(scaler_X.transform(input_df_raw), columns=scaler_X.feature_names_in_)
         input_sel = input_scaled_df[important_features]
-        
+
         explainer = shap.KernelExplainer(model.predict, background_data)
         shap_values_raw = explainer.shap_values(input_sel)
         
