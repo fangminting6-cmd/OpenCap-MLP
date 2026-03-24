@@ -182,7 +182,7 @@ def run_analysis(sid, keyword, model_obj):
             ]
             features_array = np.array([feature_values])
             
-           loaded_package = joblib.load(model_obj)
+            loaded_package = joblib.load(model_obj)
             model = loaded_package['model']
             scaler_X = loaded_package['scaler_X']
             scaler_y = loaded_package['scaler_y']
