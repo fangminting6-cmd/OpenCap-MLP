@@ -234,7 +234,7 @@ def run_analysis(sid, keyword, model_obj):
             # 展示总体风险判定
             st.markdown(f"### 风险判定: <span style='color:{overall_color};'>{overall_text}</span>", unsafe_allow_html=True)
         # --- SHAP 可视化 ---
-       st.subheader("📊 关键动作特征贡献分析 (SHAP)")
+        st.subheader("📊 关键动作特征贡献分析 (SHAP)")
         
         explainer = shap.KernelExplainer(model.predict, background_data)
         shap_values_raw = explainer.shap_values(input_sel)
