@@ -216,7 +216,7 @@ def run_analysis(sid, keyword, model_obj):
         
         # 💡 1. 设定两个指标的高风险阈值 (请根据你的实验标准修改下面的数字)
         ACL_THRESHOLD = 2.45
-        KNEE_LOAD_THRESHOLD = 3.0  # <--- ⚠️ 请把 3.0 改为你判定 knee-load 高风险的实际标准
+        KNEE_LOAD_THRESHOLD = 4.5  # <--- ⚠️ 请把 3.0 改为你判定 knee-load 高风险的实际标准
         
         # 💡 2. 分别判断两个指标是否超标
         is_acl_risk = score_acl >= ACL_THRESHOLD
@@ -230,15 +230,15 @@ def run_analysis(sid, keyword, model_obj):
         # 调整为 3 列，展示指标的同时加上超标警告小标签
         m_col1, m_col2, m_col3 = st.columns(3)
         
-        with m_col1:
-            # 如果 ACL 超标，显示红色的 [超标] 警告
-            acl_warning = "<span style='color:#d63031; font-size:18px; font-weight:bold;'> (超标)</span>" if is_acl_risk else ""
-            st.markdown(f"### ACL 应力: <span style='color:#2d3436;'>{score_acl:.2f}</span>{acl_warning}", unsafe_allow_html=True)
+       with m_col1:
+            # 如果 ACL 超标，显示红色的向上箭头
+            acl_warning = "<span style='color:#d63031; font-size:22px; font-weight:bold;'> ▲</span>" if is_acl_risk else ""
+            st.markdown(f"### ACL 应力值（×BW）: <span style='color:#2d3436;'>{score_acl:.2f}</span>{acl_warning}", unsafe_allow_html=True)
             
         with m_col2:
-            # 如果 Knee-load 超标，显示红色的 [超标] 警告
-            knee_warning = "<span style='color:#d63031; font-size:18px; font-weight:bold;'> (超标)</span>" if is_knee_risk else ""
-            st.markdown(f"### Knee Load: <span style='color:#2d3436;'>{score_kneeload:.2f}</span>{knee_warning}", unsafe_allow_html=True)
+            # 如果 Knee-load 超标，显示红色的向上箭头
+            knee_warning = "<span style='color:#d63031; font-size:22px; font-weight:bold;'> ▲</span>" if is_knee_risk else ""
+            st.markdown(f"### 膝关节总接触力: <span style='color:#2d3436;'>{score_kneeload:.2f}</span>{knee_warning}", unsafe_allow_html=True)
             
         with m_col3:
             # 展示总体风险判定
@@ -325,14 +325,16 @@ def run_analysis(sid, keyword, model_obj):
         
         risk_factors = shap_df[shap_df['contribution'] > 0].sort_values(by='contribution', ascending=False)
 
-        with st.expander("📋 针对性动作改善建议 (基于 ACL 风险)", expanded=True):
+        with st.expander("📋 针对性动作改善建议", expanded=True):
             st.markdown(f"**分析对象**: `{trial_id}`  |  **触地瞬间 (IC)**: 第 {ic_idx+1} 帧")
             
             if not risk_factors.empty:
                 st.markdown("#### ⚠️ 高风险动作特征偏差分析 (实测值 vs 正常值)")
                 
-                # 哑铃图绘制逻辑
+                 # --- 开始绘制哑铃图 ---
+                # 根据高风险特征数量动态调整图表高度
                 fig_db, ax_db = plt.subplots(figsize=(3.0, len(risk_factors) * 0.25 + 0.8), dpi=200)
+                
                 y_labels = []
                 y_ticks = []
                 
@@ -342,12 +344,17 @@ def run_analysis(sid, keyword, model_obj):
                     normal_val = NORMAL_VALUES.get(f_name, 0)
                     y = idx
                     
+                    # 连线
                     ax_db.plot([actual_val, normal_val], [y, y], color='#dcdde1', zorder=1, lw=1)
+                    
+                    # 极小圆点
                     ax_db.scatter(normal_val, y, color='#008bfb', s=15, zorder=2, label='Normal Value' if idx==len(risk_factors)-1 else "")
                     ax_db.scatter(actual_val, y, color='#ff0051', s=15, zorder=2, label='Actual Risk' if idx==len(risk_factors)-1 else "")
                     
+                    left_val, right_val = min(actual_val, normal_val), max(actual_val, normal_val)
                     offset = max(abs(actual_val - normal_val) * 0.1, 0.5) 
                     
+                    # 极限小字体
                     if actual_val < normal_val:
                         ax_db.text(actual_val - offset, y, f"{actual_val:.1f}", va='center', ha='right', fontsize=6, color='#ff0051', fontweight='bold')
                         ax_db.text(normal_val + offset, y, f"{normal_val:.1f}", va='center', ha='left', fontsize=6, color='#008bfb')
@@ -358,22 +365,33 @@ def run_analysis(sid, keyword, model_obj):
                     y_labels.append(f_name)
                     y_ticks.append(y)
                 
+                # 设置Y轴和X轴
                 ax_db.set_yticks(y_ticks)
                 ax_db.set_yticklabels(y_labels, fontsize=7, fontweight='bold', color='#2d3436')
                 ax_db.set_xlabel("Angle (Degree)", fontsize=7, color='#636e72')
                 ax_db.tick_params(axis='x', labelsize=6)
                 
+                # 美化图表
                 ax_db.spines['top'].set_visible(False)
                 ax_db.spines['right'].set_visible(False)
                 ax_db.spines['left'].set_visible(False)
                 ax_db.spines['bottom'].set_color('#b2bec3')
                 ax_db.grid(axis='x', linestyle='--', alpha=0.5)
                 
+                # 两侧留白
+                x_min, x_max = ax_db.get_xlim()
+                ax_db.set_xlim(x_min - (x_max-x_min)*0.25, x_max + (x_max-x_min)*0.25)
+                
+                # 【修改点 1】：把上限从 len(risk_factors) 改成 len(risk_factors) + 0.5
+                # 这样会把图表内部的“天花板”再往上抬高一截，给最上面的 ADF 留出更多呼吸空间
                 ax_db.set_ylim(-1.0, len(risk_factors) + 0.7)
+                
+                # 【修改点 2】：把图例的高度位置从 1.15 调高到 1.25 或 1.3
                 ax_db.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=2, frameon=False, fontsize=6)
                 
                 plt.tight_layout()
                 st.pyplot(fig_db, clear_figure=True, use_container_width=False)
+                # --- 哑铃图绘制结束 ---
 
                 st.markdown("#### 🎯 动作处方：")
                 for _, row in risk_factors.iterrows():
