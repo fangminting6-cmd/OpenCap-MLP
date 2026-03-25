@@ -120,9 +120,9 @@ model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用
 # 💡 新增：定义 3D 骨架绘制函数
 def create_3d_skeleton_plot(df_trc, ic_idx):
     """
-    使用 Plotly 绘制完整的全身 3D 骨架动画，解决乱码、飞点和黑球缩放问题
+    使用 Plotly 绘制完整的全身 3D 骨架动画，强制采用正方体视口充满屏幕
     """
-    # 1. 依据 single-jumpGR_6_1.trc 真实表头提取的所有核心标记点
+    # 1. 核心标记点映射
     marker_map = {
         "Neck": 2, "RShoulder": 5, "RElbow": 8, "RWrist": 11,
         "LShoulder": 14, "LElbow": 17, "LWrist": 20,
@@ -147,40 +147,48 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
         for seg in segments:
             for point in seg:
                 col = marker_map[point]
-                # TRC 原始数据可能有缺失值，填补为上一帧或0会引发变形，交给 Plotly 的 None 截断处理
-                x = df_trc.iloc[frame_idx, col]
-                y = df_trc.iloc[frame_idx, col + 2] # 映射到 Plotly 深度 Y
-                z = df_trc.iloc[frame_idx, col + 1] # 映射到 Plotly 高度 Z
-                x_vals.append(x)
-                y_vals.append(y)
-                z_vals.append(z)
-            # 插入 None 断开线段
+                x_vals.append(df_trc.iloc[frame_idx, col])
+                y_vals.append(df_trc.iloc[frame_idx, col + 2])
+                z_vals.append(df_trc.iloc[frame_idx, col + 1])
             x_vals.append(None)
             y_vals.append(None)
             z_vals.append(None)
         return x_vals, y_vals, z_vals
 
-    # 3. 初始化基础图层：直接使用 ic_idx 帧（确保有真实动作，而非第0帧的噪点数据）
+    # 3. 初始化画面：直接锁定在最危险的触地瞬间 (IC)
     x_init, y_init, z_init = get_frame_data(ic_idx)
     fig = go.Figure(
         data=[go.Scatter3d(
             x=x_init, y=y_init, z=z_init,
             mode='lines+markers',
-            line=dict(color='#ff0051', width=8), # IC 瞬间默认红色加粗
-            marker=dict(size=2, color='#2d3436'), # 把黑色节点缩到极小，不再喧宾夺主
+            line=dict(color='#ff0051', width=8), 
+            marker=dict(size=3, color='#2d3436'), 
             name="Skeleton"
         )]
     )
 
-    # --- 核心修复：基于健康的 ic_idx 帧计算 3D 边界，过滤掉远处的飞点 ---
+    # --- 🌟 核心修复：构建“正方体着陆区”视口 ---
     safe_x = [v for v in x_init if v is not None and not np.isnan(v)]
     safe_y = [v for v in y_init if v is not None and not np.isnan(v)]
     safe_z = [v for v in z_init if v is not None and not np.isnan(v)]
+
+    # 找到着地瞬间人物的中心点
+    mid_x = (max(safe_x) + min(safe_x)) / 2
+    mid_y = (max(safe_y) + min(safe_y)) / 2
+    max_z = max(safe_z)
+
+    # 找出最大的身体跨度（通常是身高，大概 1.8米 左右）
+    spread_x = max(safe_x) - min(safe_x)
+    spread_y = max(safe_y) - min(safe_y)
+    max_spread = max(spread_x, spread_y, max_z)
     
-    # 给人体周围加上 0.4 米的活动空间缓冲
-    x_range = [min(safe_x) - 0.4, max(safe_x) + 0.4]
-    y_range = [min(safe_y) - 0.4, max(safe_y) + 0.4]
-    z_range = [0, max(safe_z) + 0.4] 
+    # 强制将 3D 盒子变成一个正方体 (边长为身高加一点点呼吸空间)
+    box_size = max_spread * 1.15
+
+    # 设定长、宽、高完全相等的边界
+    x_range = [mid_x - box_size/2, mid_x + box_size/2]
+    y_range = [mid_y - box_size/2, mid_y + box_size/2]
+    z_range = [0, box_size]  # 假设脚底大概在 0 的位置
 
     # 4. 生成每一帧的动画数据
     frames = []
@@ -189,7 +197,6 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     
     for i in range(0, total_frames, step):
         x_f, y_f, z_f = get_frame_data(i)
-        # 触地瞬间前后高亮红色，其余用蓝色
         is_ic = abs(i - ic_idx) <= step * 2
         skel_color = '#ff0051' if is_ic else '#008bfb'
         skel_width = 8 if is_ic else 5
@@ -201,17 +208,15 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     
     fig.frames = frames
 
-    # 5. 应用我们计算好的安全边界，并强制锁定物理比例为 1:1:1
+    # 5. 配置布局
     fig.update_layout(
         scene=dict(
             xaxis=dict(title='X (左右)', range=x_range, showgrid=True),
             yaxis=dict(title='Y (前后)', range=y_range, showgrid=True),
             zaxis=dict(title='Z (高度)', range=z_range, showgrid=True),
-            aspectmode='manual',
-            aspectratio=dict(
-                x=(x_range[1]-x_range[0]), 
-                y=(y_range[1]-y_range[0]), 
-                z=(z_range[1]-z_range[0])
+            aspectmode='cube',  # 👈 魔法就在这：强制 3D 空间为正方体，撑满屏幕！
+            camera=dict(
+                eye=dict(x=1.3, y=1.3, z=0.6)  # 默认给一个能看清侧面和正面的黄金视角
             )
         ),
         updatemenus=[dict(
