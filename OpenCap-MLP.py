@@ -236,7 +236,7 @@ def run_analysis(sid, keyword, model_obj):
             
         with m_col2:
             knee_warning = "<span style='color:#d63031; font-size:22px; font-weight:bold;'> ▲</span>" if is_knee_risk else ""
-            st.markdown(f"### 膝关节总接触力: <span style='color:#2d3436;'>{score_kneeload:.2f}</span>{knee_warning}", unsafe_allow_html=True)
+            st.markdown(f"### 膝关节总接触力（×BW）: <span style='color:#2d3436;'>{score_kneeload:.2f}</span>{knee_warning}", unsafe_allow_html=True)
 
         # 换行：展示总体风险判定 (占据整行宽度)
         st.write("") # 加一点微小的间距
