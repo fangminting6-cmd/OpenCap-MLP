@@ -284,14 +284,20 @@ def run_analysis(sid, keyword, model_obj):
             expected_val_acl = explainer.expected_value
             expected_val_kneeload = explainer.expected_value
             
-        # 7. 组装数据
-        input_raw_sel = input_df_raw[important_features].iloc[0].values
-        
+       # 7. 组装数据 (对显示的特征数值进行四舍五入，保留一位小数)
+        input_raw_sel = np.round(input_df_raw[important_features].iloc[0].values.astype(float), 1)
+
         exp_acl = shap.Explanation(
-            values=val_acl, base_values=expected_val_acl, data=input_raw_sel, feature_names=important_features
+            values=val_acl, 
+            base_values=expected_val_acl, 
+            data=input_raw_sel,  # 此时这里的数值已经是 28.4 这种格式了
+            feature_names=important_features
         )
         exp_kneeload = shap.Explanation(
-            values=val_kneeload, base_values=expected_val_kneeload, data=input_raw_sel, feature_names=important_features
+            values=val_kneeload, 
+            base_values=expected_val_kneeload, 
+            data=input_raw_sel, 
+            feature_names=important_features
         )
 
         # --- 开始渲染 UI 标签页 ---
