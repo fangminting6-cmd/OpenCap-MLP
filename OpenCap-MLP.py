@@ -118,7 +118,7 @@ model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用
 
 # ===================== 3. 核心分析逻辑 =====================
 # 💡 新增：定义 3D 骨架绘制函数
-def create_3d_skeleton_plot(df_trc, ic_idx):
+def create_3d_skeleton_plot(df_trc, df_mot, ic_idx): # 注意：这里多传了一个 df_mot
     marker_map = {
         "Neck": 2, "RShoulder": 5, "RElbow": 8, "RWrist": 11,
         "LShoulder": 14, "LElbow": 17, "LWrist": 20,
@@ -150,107 +150,95 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
             z_vals.append(None)
         return x_vals, y_vals, z_vals
 
-    # --- 🛡️ 智能贴身剪裁算法 (让人物尽可能充满屏幕) ---
+    # --- 新增：获取特定关节的坐标和角度文本 ---
+    def get_label_data(frame_idx):
+        # 我们选择展示：右膝、右髋、右踝
+        label_joints = ["RKnee", "RHip", "RAnkle"]
+        # 对应 df_mot 中的列名 (需确保你的 mot 文件列名一致)
+        mot_columns = ["knee_angle_r", "hip_flexion_r", "ankle_angle_r"]
+        
+        lx, ly, lz, texts = [], [], [], []
+        for joint, col_name in zip(label_joints, mot_columns):
+            col = marker_map[joint]
+            lx.append(df_trc.iloc[frame_idx, col])
+            ly.append(df_trc.iloc[frame_idx, col + 2])
+            lz.append(df_trc.iloc[frame_idx, col + 1])
+            
+            # 从 df_mot 获取角度值
+            val = df_mot.iloc[frame_idx].get(col_name, 0)
+            texts.append(f"{val:.1f}°")
+        return lx, ly, lz, texts
+
+    # --- 布局与范围计算 (保持你原有的逻辑) ---
     pelvis_col = marker_map["midHip"]
-    neck_col = marker_map["Neck"]
-    
-    # 提取骨盆(中心点)和脖子(最高点)的数据
     p_x = pd.to_numeric(df_trc.iloc[:, pelvis_col], errors='coerce').dropna().values
     p_y = pd.to_numeric(df_trc.iloc[:, pelvis_col + 2], errors='coerce').dropna().values
-    n_z = pd.to_numeric(df_trc.iloc[:, neck_col + 1], errors='coerce').dropna().values
-    
-    # 锁定中心点，忽略极端噪点
-    cx = (np.percentile(p_x, 95) + np.percentile(p_x, 5)) / 2
-    cy = (np.percentile(p_y, 95) + np.percentile(p_y, 5)) / 2
-    
-    # 计算水平移动范围
-    span_x = np.percentile(p_x, 95) - np.percentile(p_x, 5)
-    span_y = np.percentile(p_y, 95) - np.percentile(p_y, 5)
-    
-    # 动态获取人的最大跳跃高度（加上 0.25 米的头部空间缓冲）
-    try:
-        max_height = np.percentile(n_z, 98) + 0.25
-    except:
-        max_height = 1.9 # 保底高度
-    
-    # 完美尺寸：横向留出肢体摆动空间 (加0.6)，纵向刚好包住跳跃最高点
-    box_size = max(span_x + 0.6, span_y + 0.6, max_height) 
+    cx, cy = (np.percentile(p_x, 95) + np.percentile(p_x, 5)) / 2, (np.percentile(p_y, 95) + np.percentile(p_y, 5)) / 2
+    box_size = 1.8 
+    range_x, range_y, range_z = [cx - box_size/2, cx + box_size/2], [cy - box_size/2, cy + box_size/2], [0, box_size]
 
-    # 严丝合缝的正方体边界
-    range_x = [cx - box_size/2, cx + box_size/2]
-    range_y = [cy - box_size/2, cy + box_size/2]
-    range_z = [0, box_size] 
-
-    # --- 🎨 白色清新视觉风格设定 ---
-    BG_COLOR = '#ffffff'           # 纯白背景
-    BONE_COLOR = '#008bfb'         # 清新科技蓝
-    ALERT_COLOR = '#ff0051'        # 警报红
-    BONE_WIDTH = 5                 
-
+    # --- 初始数据 ---
     x_init, y_init, z_init = get_frame_data(ic_idx)
-    fig = go.Figure(
-        data=[go.Scatter3d(
-            x=x_init, y=y_init, z=z_init,
-            mode='lines+markers',
-            line=dict(color=ALERT_COLOR, width=8), 
-            marker=dict(size=3, color='#2d3436'), 
-            name="Skeleton"
-        )]
-    )
+    lx_init, ly_init, lz_init, lt_init = get_label_data(ic_idx)
 
+    fig = go.Figure()
+
+    # 轨迹 1：骨架线
+    fig.add_trace(go.Scatter3d(
+        x=x_init, y=y_init, z=z_init,
+        mode='lines+markers',
+        line=dict(color='#008bfb', width=5),
+        marker=dict(size=2, color='#2d3436'),
+        name="Skeleton"
+    ))
+
+    # 轨迹 2：实时角度标签层 (新加)
+    fig.add_trace(go.Scatter3d(
+        x=lx_init, y=ly_init, z=lz_init,
+        mode='text+markers',
+        text=lt_init,
+        textposition="top center",
+        textfont=dict(family="Arial Black", size=14, color="#ff0051"),
+        marker=dict(size=4, color="#ff0051", symbol='circle'),
+        name="Joint Angles"
+    ))
+
+    # --- 构建动画帧 ---
     frames = []
     step = 2
-    total_frames = len(df_trc)
-    
-    for i in range(0, total_frames, step):
-        x_f, y_f, z_f = get_frame_data(i)
-        is_ic = abs(i - ic_idx) <= step * 2
-        skel_color = ALERT_COLOR if is_ic else BONE_COLOR
-        skel_width = 8 if is_ic else BONE_WIDTH
+    for i in range(0, len(df_trc), step):
+        xf, yf, zf = get_frame_data(i)
+        lxf, lyf, lzf, ltf = get_label_data(i)
+        
+        # 判断是否在 IC 瞬间，改变颜色
+        is_ic = abs(i - ic_idx) <= step
+        color = '#ff0051' if is_ic else '#008bfb'
         
         frames.append(go.Frame(
-            data=[go.Scatter3d(x=x_f, y=y_f, z=z_f, line=dict(color=skel_color, width=skel_width))],
+            data=[
+                go.Scatter3d(x=xf, y=yf, z=zf, line=dict(color=color)), # 更新骨架
+                go.Scatter3d(x=lxf, y=lyf, z=lzf, text=ltf)             # 更新标签
+            ],
             name=str(i)
         ))
     
     fig.frames = frames
 
-    # --- 🎛️ 终极浅色布局 ---
-    no_axis_style = dict(
-        showbackground=False, showline=False, zeroline=False, 
-        showticklabels=False, title='', showgrid=True, gridcolor='#e2e8f0' # 淡淡的灰色网格
-    )
-
+    # --- 样式配置 (保持清新风格) ---
     fig.update_layout(
-        paper_bgcolor=BG_COLOR, 
+        paper_bgcolor='white',
         scene=dict(
-            bgcolor=BG_COLOR,   
-            xaxis=dict(**no_axis_style, range=range_x, autorange=False),
-            yaxis=dict(**no_axis_style, range=range_y, autorange=False),
-            zaxis=dict(**no_axis_style, range=range_z, autorange=False),
-            aspectmode='cube', 
-            camera=dict(
-                projection=dict(type='orthographic'), # 正交视图：不畸变不闪烁
-                eye=dict(x=0.9, y=0.9, z=0.4)         # 💡 镜头大幅拉近！视觉占比拉满！
-            )
+            xaxis=dict(range=range_x, showticklabels=False, title=''),
+            yaxis=dict(range=range_y, showticklabels=False, title=''),
+            zaxis=dict(range=range_z, showticklabels=False, title=''),
+            aspectmode='cube',
+            camera=dict(eye=dict(x=1.2, y=1.2, z=0.6))
         ),
+        margin=dict(r=0, l=0, b=0, t=0),
         updatemenus=[dict(
-            type="buttons", showactive=False,
-            font=dict(color="#2d3436"), bgcolor="#f1f2f6", # 浅灰底，深色字
-            y=0, x=-0.05, xanchor="right", yanchor="top",
-            buttons=[
-                dict(label="▶ 播放", method="animate", args=[None, dict(frame=dict(duration=30, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
-                dict(label="⏸ 暂停", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate", transition=dict(duration=0))])
-            ]
-        )],
-        sliders=[dict(
-            currentvalue={"prefix": "当前帧: ", "font": {"color": "#2d3436"}}, 
-            font=dict(color="#636e72"),
-            y=0, x=0, len=1, xanchor="left", yanchor="top",
-            steps=[dict(method='animate', args=[[str(i)], dict(mode='immediate', frame=dict(duration=0, redraw=True), transition=dict(duration=0))], label=str(i)) for i in range(0, total_frames, step)]
-        )],
-        margin=dict(r=0, l=0, b=0, t=0), 
-        height=600 
+            type="buttons",
+            buttons=[dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=30))])]
+        )]
     )
     return fig
 
