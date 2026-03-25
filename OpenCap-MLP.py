@@ -120,8 +120,7 @@ model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用
 # 💡 新增：定义 3D 骨架绘制函数
 def create_3d_skeleton_plot(df_trc, ic_idx):
     """
-    使用 Plotly 绘制完整的全身 3D 骨架动画
-    锁定正交视角、消除透视畸变、防止骨骼长度跳动
+    复刻 Qualisys 视觉风格：暗黑背景、荧光骨架、隐藏坐标轴、正交大视角
     """
     marker_map = {
         "Neck": 2, "RShoulder": 5, "RElbow": 8, "RWrist": 11,
@@ -154,7 +153,7 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
             z_vals.append(None)
         return x_vals, y_vals, z_vals
 
-    # --- 🌟 核心防抖算法：计算全局最大跨度，构建完美正方体 ---
+    # --- 📐 精准计算视口边界，保证人物最大化且不变形 ---
     cols_x = [marker_map[k] for k in marker_map]
     cols_y = [marker_map[k]+2 for k in marker_map]
     cols_z = [marker_map[k]+1 for k in marker_map]
@@ -163,33 +162,35 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     all_y = df_trc.iloc[:, cols_y].values
     all_z = df_trc.iloc[:, cols_z].values
 
-    # 找到运动全过程的中心点
-    mid_x = (np.nanmin(all_x) + np.nanmax(all_x)) / 2
-    mid_y = (np.nanmin(all_y) + np.nanmax(all_y)) / 2
-    
-    # 找到三个维度里最大的跨度距离 (保证所有人都能装进这个范围)
-    span_x = np.nanmax(all_x) - np.nanmin(all_x)
-    span_y = np.nanmax(all_y) - np.nanmin(all_y)
-    span_z = np.nanmax(all_z) - np.nanmin(all_z)
-    max_span = max(span_x, span_y, span_z) * 1.15  # 取最大跨度，再加 15% 呼吸空间
+    # 提取跳跃的实际物理范围 (加 0.3 米的安全缓冲)
+    range_x = [np.nanmin(all_x) - 0.3, np.nanmax(all_x) + 0.3]
+    range_y = [np.nanmin(all_y) - 0.3, np.nanmax(all_y) + 0.3]
+    range_z = [0, np.nanmax(all_z) + 0.3]
 
-    # 强制将 XYZ 的范围设为完全一样长 (max_span)，这样数学上骨骼绝对不可能拉伸变形！
-    x_range = [mid_x - max_span/2, mid_x + max_span/2]
-    y_range = [mid_y - max_span/2, mid_y + max_span/2]
-    z_range = [0, max_span] # 假设脚底在 0，高度为 max_span
+    # 计算真实跨度，用于强制锁定 1:1:1 物理比例
+    span_x = range_x[1] - range_x[0]
+    span_y = range_y[1] - range_y[0]
+    span_z = range_z[1] - range_z[0]
 
-    # 初始化画面
+    # --- 🎨 Qualisys 视觉风格设定 ---
+    QTM_BG_COLOR = '#181818'       # 深灰黑背景
+    QTM_BONE_COLOR = '#00ffcc'     # 荧光青/绿
+    QTM_ALERT_COLOR = '#ff2a2a'    # 触地瞬间的警报红
+    BONE_WIDTH = 4                 # 细长锐利的线条
+
+    # 初始化第0帧画面
     x_init, y_init, z_init = get_frame_data(ic_idx)
     fig = go.Figure(
         data=[go.Scatter3d(
             x=x_init, y=y_init, z=z_init,
             mode='lines+markers',
-            line=dict(color='#ff0051', width=10),
-            marker=dict(size=4, color='#2d3436'), 
+            line=dict(color=QTM_ALERT_COLOR, width=6), 
+            marker=dict(size=2, color='#ffffff'), # 极小白点，模拟反光贴
             name="Skeleton"
         )]
     )
 
+    # 生成动画帧
     frames = []
     step = 2
     total_frames = len(df_trc)
@@ -197,8 +198,8 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     for i in range(0, total_frames, step):
         x_f, y_f, z_f = get_frame_data(i)
         is_ic = abs(i - ic_idx) <= step * 2
-        skel_color = '#ff0051' if is_ic else '#008bfb'
-        skel_width = 10 if is_ic else 6 
+        skel_color = QTM_ALERT_COLOR if is_ic else QTM_BONE_COLOR
+        skel_width = 6 if is_ic else BONE_WIDTH
         
         frames.append(go.Frame(
             data=[go.Scatter3d(x=x_f, y=y_f, z=z_f, line=dict(color=skel_color, width=skel_width))],
@@ -207,35 +208,50 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     
     fig.frames = frames
 
-    # 配置布局
+    # --- 🎛️ 终极暗黑极简布局 ---
+    # 定义隐形坐标轴（去掉所有多余的线和字，只留淡淡的网格）
+    no_axis_style = dict(
+        showbackground=False, 
+        showline=False,
+        zeroline=False, 
+        showticklabels=False, 
+        title='',
+        showgrid=True, 
+        gridcolor='#333333' # 淡淡的暗网格
+    )
+
     fig.update_layout(
+        paper_bgcolor=QTM_BG_COLOR, # 外部背景
         scene=dict(
-            xaxis=dict(title='X (左右)', range=x_range, autorange=False, showgrid=True),
-            yaxis=dict(title='Y (前后)', range=y_range, autorange=False, showgrid=True),
-            zaxis=dict(title='Z (高度)', range=z_range, autorange=False, showgrid=True),
-            aspectmode='cube',  # 配合上面等长的 range，强制构建绝对正方体
+            bgcolor=QTM_BG_COLOR,   # 3D 内部背景
+            xaxis=dict(**no_axis_style, range=range_x, autorange=False),
+            yaxis=dict(**no_axis_style, range=range_y, autorange=False),
+            zaxis=dict(**no_axis_style, range=range_z, autorange=False),
+            aspectmode='manual',
+            aspectratio=dict(x=span_x, y=span_y, z=span_z), # 👈 强制等比例且紧凑贴合！不再是小人！
             camera=dict(
-                projection=dict(type='orthographic'), # 🌟 开启正交投影：消除近大远小，防止长短波动！
-                eye=dict(x=1.2, y=1.2, z=0.5)  # 设置一个斜侧方 45 度的极佳默认视角
+                projection=dict(type='orthographic'), # 正交视图，和 QTM 一样严谨
+                eye=dict(x=1.5, y=1.0, z=0.5)         # 默认斜侧方大视角
             )
         ),
         updatemenus=[dict(
             type="buttons", showactive=False,
-            y=0, x=-0.1, xanchor="right", yanchor="top",
+            font=dict(color="#ffffff"), # 按钮文字变白
+            bgcolor="#333333",          # 按钮背景变暗
+            y=0, x=-0.05, xanchor="right", yanchor="top",
             buttons=[
-                dict(label="▶ 播放", method="animate",
-                     args=[None, dict(frame=dict(duration=30, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
-                dict(label="⏸ 暂停", method="animate",
-                     args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate", transition=dict(duration=0))])
+                dict(label="▶ 播放", method="animate", args=[None, dict(frame=dict(duration=30, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
+                dict(label="⏸ 暂停", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate", transition=dict(duration=0))])
             ]
         )],
         sliders=[dict(
-            currentvalue={"prefix": "当前帧: "},
+            currentvalue={"prefix": "当前帧: ", "font": {"color": "#ffffff"}}, # 滑块文字变白
+            font=dict(color="#aaaaaa"),
             y=0, x=0, len=1, xanchor="left", yanchor="top",
             steps=[dict(method='animate', args=[[str(i)], dict(mode='immediate', frame=dict(duration=0, redraw=True), transition=dict(duration=0))], label=str(i)) for i in range(0, total_frames, step)]
         )],
-        margin=dict(r=0, l=0, b=0, t=30),
-        height=550
+        margin=dict(r=10, l=10, b=10, t=10), # 极小边距，让画面撑满
+        height=650 # 增加高度让窗口显得更大气
     )
     return fig
 
@@ -377,7 +393,7 @@ def run_analysis(sid, keyword, model_obj):
         # =========================================================
         # 💡 新增：在这里插入 3D 动作姿态重构视图
         # =========================================================
-        st.subheader("🧊 3D 触地瞬间姿态重构")
+        st.subheader("🟢 动作捕捉数字孪生回放 (QTM Viewer)")
         col_3d, col_info = st.columns([2, 1])
         
         with col_3d:
