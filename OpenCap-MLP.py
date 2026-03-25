@@ -120,7 +120,8 @@ model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用
 # 💡 新增：定义 3D 骨架绘制函数
 def create_3d_skeleton_plot(df_trc, ic_idx):
     """
-    使用 Plotly 绘制完整的全身 3D 骨架动画，紧凑视口，人物超大超清晰！
+    使用 Plotly 绘制完整的全身 3D 骨架动画
+    锁定正交视角、消除透视畸变、防止骨骼长度跳动
     """
     marker_map = {
         "Neck": 2, "RShoulder": 5, "RElbow": 8, "RWrist": 11,
@@ -153,8 +154,7 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
             z_vals.append(None)
         return x_vals, y_vals, z_vals
 
-    # --- 🌟 核心修复：计算整个跳跃动作的【极度贴身】边界 ---
-    # 提取所有要画的列
+    # --- 🌟 核心防抖算法：计算全局最大跨度，构建完美正方体 ---
     cols_x = [marker_map[k] for k in marker_map]
     cols_y = [marker_map[k]+2 for k in marker_map]
     cols_z = [marker_map[k]+1 for k in marker_map]
@@ -163,10 +163,20 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     all_y = df_trc.iloc[:, cols_y].values
     all_z = df_trc.iloc[:, cols_z].values
 
-    # 找出绝对的最小和最大值（只加 0.15 米的极小缓冲，拒绝空旷！）
-    x_range = [np.nanmin(all_x) - 0.15, np.nanmax(all_x) + 0.15]
-    y_range = [np.nanmin(all_y) - 0.15, np.nanmax(all_y) + 0.15]
-    z_range = [0, np.nanmax(all_z) + 0.15] # 脚踩实地
+    # 找到运动全过程的中心点
+    mid_x = (np.nanmin(all_x) + np.nanmax(all_x)) / 2
+    mid_y = (np.nanmin(all_y) + np.nanmax(all_y)) / 2
+    
+    # 找到三个维度里最大的跨度距离 (保证所有人都能装进这个范围)
+    span_x = np.nanmax(all_x) - np.nanmin(all_x)
+    span_y = np.nanmax(all_y) - np.nanmin(all_y)
+    span_z = np.nanmax(all_z) - np.nanmin(all_z)
+    max_span = max(span_x, span_y, span_z) * 1.15  # 取最大跨度，再加 15% 呼吸空间
+
+    # 强制将 XYZ 的范围设为完全一样长 (max_span)，这样数学上骨骼绝对不可能拉伸变形！
+    x_range = [mid_x - max_span/2, mid_x + max_span/2]
+    y_range = [mid_y - max_span/2, mid_y + max_span/2]
+    z_range = [0, max_span] # 假设脚底在 0，高度为 max_span
 
     # 初始化画面
     x_init, y_init, z_init = get_frame_data(ic_idx)
@@ -174,8 +184,8 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
         data=[go.Scatter3d(
             x=x_init, y=y_init, z=z_init,
             mode='lines+markers',
-            line=dict(color='#ff0051', width=12), # 骨架超级加粗！
-            marker=dict(size=5, color='#2d3436'), 
+            line=dict(color='#ff0051', width=10),
+            marker=dict(size=4, color='#2d3436'), 
             name="Skeleton"
         )]
     )
@@ -188,7 +198,7 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
         x_f, y_f, z_f = get_frame_data(i)
         is_ic = abs(i - ic_idx) <= step * 2
         skel_color = '#ff0051' if is_ic else '#008bfb'
-        skel_width = 12 if is_ic else 8  # 整体加粗
+        skel_width = 10 if is_ic else 6 
         
         frames.append(go.Frame(
             data=[go.Scatter3d(x=x_f, y=y_f, z=z_f, line=dict(color=skel_color, width=skel_width))],
@@ -200,13 +210,13 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     # 配置布局
     fig.update_layout(
         scene=dict(
-            # 必须加 autorange=False，死死锁住这个小框，不让它乱变
             xaxis=dict(title='X (左右)', range=x_range, autorange=False, showgrid=True),
             yaxis=dict(title='Y (前后)', range=y_range, autorange=False, showgrid=True),
             zaxis=dict(title='Z (高度)', range=z_range, autorange=False, showgrid=True),
-            aspectmode='data',  # 👈 魔法就在这：物理比例1:1，且边框完全按数据的长宽高贴紧！
+            aspectmode='cube',  # 配合上面等长的 range，强制构建绝对正方体
             camera=dict(
-                eye=dict(x=0.8, y=1.0, z=0.4)  # 👈 镜头拉近！怼着侧面/半正面看！
+                projection=dict(type='orthographic'), # 🌟 开启正交投影：消除近大远小，防止长短波动！
+                eye=dict(x=1.2, y=1.2, z=0.5)  # 设置一个斜侧方 45 度的极佳默认视角
             )
         ),
         updatemenus=[dict(
