@@ -385,7 +385,7 @@ def run_analysis(sid, keyword, model_obj):
         
         with col_3d:
             # 调用我们在上面定义的 3D 绘制函数
-            fig_3d = create_3d_skeleton_plot(df_trc, ic_idx)
+            fig_3d = create_3d_skeleton_plot(df_trc, df_mot, ic_idx)
             st.plotly_chart(fig_3d, use_container_width=True)
             
         with col_info:
