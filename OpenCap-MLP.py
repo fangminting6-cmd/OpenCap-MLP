@@ -10,6 +10,7 @@ import io
 import zipfile
 import traceback
 import streamlit as st
+import plotly.graph_objects as go
 
 # ===================== 0. 全局配置 =====================
 DEFAULT_MODEL_NAME = "final_MLP_multioutput_model.pkl"  # <--- 新增：定义仓库里的模型文件名
@@ -116,6 +117,64 @@ trial_keyword = st.sidebar.text_input("动作试次名称", value="single-jumpGR
 model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用内置默认模型)", type=["pkl"])
 
 # ===================== 3. 核心分析逻辑 =====================
+# 💡 新增：定义 3D 骨架绘制函数
+def create_3d_skeleton_plot(df_trc, ic_idx):
+    """
+    使用 Plotly 绘制触地瞬间(IC)的 3D 骨架
+    """
+    def get_coords(col_start_idx, frame):
+        # 从 df_trc 获取 XYZ 坐标。
+        # OpenCap 系统的 Y 轴通常是垂直向上的，为了在 Plotly 中看着符合直觉，
+        # 我们把坐标轴映射为: Plotly_X = 左右, Plotly_Y = 前后(Z), Plotly_Z = 上下(Y)
+        x = df_trc.iloc[frame, col_start_idx]
+        y = df_trc.iloc[frame, col_start_idx + 2] 
+        z = df_trc.iloc[frame, col_start_idx + 1] 
+        return x, y, z
+
+    # ✅ 已经根据 single-jumpGR_6_1.trc 的表头精准计算出的真实索引
+    marker_map = {
+        "Pelvis": 23,   # midHip
+        "RHip": 26,     # RHip
+        "RKnee": 29,    # RKnee
+        "RAnkle": 32,   # RAnkle
+        "RToe": 53      # RBigToe
+    }
+
+    fig = go.Figure()
+
+    # 绘制下肢骨骼连线 (骨盆 -> 髋 -> 膝 -> 踝 -> 脚尖)
+    bones = [("Pelvis", "RHip"), ("RHip", "RKnee"), ("RKnee", "RAnkle"), ("RAnkle", "RToe")]
+    
+    for start, end in bones:
+        try:
+            x1, y1, z1 = get_coords(marker_map[start], ic_idx)
+            x2, y2, z2 = get_coords(marker_map[end], ic_idx)
+            
+            fig.add_trace(go.Scatter3d(
+                x=[x1, x2], y=[y1, y2], z=[z1, z2],
+                mode='lines+markers',
+                line=dict(color='#ff0051', width=8), # 红色高亮触地瞬间
+                marker=dict(size=6, color='#2d3436'),
+                hoverinfo='name',
+                name=f"{start}-{end}"
+            ))
+        except Exception:
+            pass # 如果有任何数据缺失则忽略
+
+    # 设置 3D 场景比例和视角
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(title='X (左右)', showgrid=True),
+            yaxis=dict(title='Y (前后)', showgrid=True),
+            zaxis=dict(title='Z (垂直高度)', showgrid=True),
+            aspectmode='data' # 强制 1:1:1 真实物理比例，防止拉伸变形
+        ),
+        margin=dict(r=0, l=0, b=0, t=0),
+        showlegend=False,
+        height=450
+    )
+    return fig
+
 def run_analysis(sid, keyword, model_obj):
     try:
         with st.status("🔍 正在执行分析流程...", expanded=True) as status:
@@ -251,6 +310,29 @@ def run_analysis(sid, keyword, model_obj):
             """, 
             unsafe_allow_html=True
         )
+        # =========================================================
+        # 💡 新增：在这里插入 3D 动作姿态重构视图
+        # =========================================================
+        st.subheader("🧊 3D 触地瞬间姿态重构")
+        col_3d, col_info = st.columns([2, 1])
+        
+        with col_3d:
+            # 调用我们在上面定义的 3D 绘制函数
+            fig_3d = create_3d_skeleton_plot(df_trc, ic_idx)
+            st.plotly_chart(fig_3d, use_container_width=True)
+            
+        with col_info:
+            st.info(f"""
+            **📍 当前分析帧**: 第 {ic_idx + 1} 帧 (触地瞬间 Initial Contact)
+            
+            **🔬 观察重点**:
+            * **正面观**：右膝 (RKnee) 是否偏向内侧（膝外翻 / 髋内收过大）。
+            * **侧面观**：右膝 (RKnee) 的弯曲角度 (KFA) 是否过于笔直（缓冲不足）。
+            
+            *(你可以使用鼠标左键拖拽旋转模型，滚轮缩放查看细节)*
+            """)
+        st.divider()
+        # =========================================================
 
         # --- SHAP 可视化 ---
         st.subheader("📊 关键动作特征贡献分析 (SHAP)")
