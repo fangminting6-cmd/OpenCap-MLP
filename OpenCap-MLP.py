@@ -150,41 +150,50 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
             z_vals.append(None)
         return x_vals, y_vals, z_vals
 
-    # --- 🛡️ 防弹级舞台定位算法 ---
-    # 我们只用骨盆 (midHip) 的轨迹来确定舞台中心，因为骨盆最不容易丢失数据
+    # --- 🛡️ 智能贴身剪裁算法 (让人物尽可能充满屏幕) ---
     pelvis_col = marker_map["midHip"]
+    neck_col = marker_map["Neck"]
+    
+    # 提取骨盆(中心点)和脖子(最高点)的数据
     p_x = pd.to_numeric(df_trc.iloc[:, pelvis_col], errors='coerce').dropna().values
     p_y = pd.to_numeric(df_trc.iloc[:, pelvis_col + 2], errors='coerce').dropna().values
+    n_z = pd.to_numeric(df_trc.iloc[:, neck_col + 1], errors='coerce').dropna().values
     
-    # 使用 5% 和 95% 分位数，完美无视所有瞬间飞到 9999 的错误噪点！
+    # 锁定中心点，忽略极端噪点
     cx = (np.percentile(p_x, 95) + np.percentile(p_x, 5)) / 2
     cy = (np.percentile(p_y, 95) + np.percentile(p_y, 5)) / 2
     
-    # 算一下运动轨迹的跨度
+    # 计算水平移动范围
     span_x = np.percentile(p_x, 95) - np.percentile(p_x, 5)
     span_y = np.percentile(p_y, 95) - np.percentile(p_y, 5)
     
-    # 强制焊死一个舞台大小：至少 2.4 米高（包住人），如果跳跃距离超过 2.4 米，就用跳跃距离
-    box_size = max(span_x, span_y, 2.4) 
+    # 动态获取人的最大跳跃高度（加上 0.25 米的头部空间缓冲）
+    try:
+        max_height = np.percentile(n_z, 98) + 0.25
+    except:
+        max_height = 1.9 # 保底高度
+    
+    # 完美尺寸：横向留出肢体摆动空间 (加0.6)，纵向刚好包住跳跃最高点
+    box_size = max(span_x + 0.6, span_y + 0.6, max_height) 
 
-    # 划定绝对相等的边界，只要范围相等 + aspectmode='cube'，比例就永远是完美的 1:1:1
+    # 严丝合缝的正方体边界
     range_x = [cx - box_size/2, cx + box_size/2]
     range_y = [cy - box_size/2, cy + box_size/2]
     range_z = [0, box_size] 
 
-    # --- 🎨 Qualisys 视觉风格设定 ---
-    QTM_BG_COLOR = '#181818'       
-    QTM_BONE_COLOR = '#00ffcc'     
-    QTM_ALERT_COLOR = '#ff2a2a'    
-    BONE_WIDTH = 4                 
+    # --- 🎨 白色清新视觉风格设定 ---
+    BG_COLOR = '#ffffff'           # 纯白背景
+    BONE_COLOR = '#008bfb'         # 清新科技蓝
+    ALERT_COLOR = '#ff0051'        # 警报红
+    BONE_WIDTH = 5                 
 
     x_init, y_init, z_init = get_frame_data(ic_idx)
     fig = go.Figure(
         data=[go.Scatter3d(
             x=x_init, y=y_init, z=z_init,
             mode='lines+markers',
-            line=dict(color=QTM_ALERT_COLOR, width=6), 
-            marker=dict(size=2, color='#ffffff'), 
+            line=dict(color=ALERT_COLOR, width=8), 
+            marker=dict(size=3, color='#2d3436'), 
             name="Skeleton"
         )]
     )
@@ -196,8 +205,8 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     for i in range(0, total_frames, step):
         x_f, y_f, z_f = get_frame_data(i)
         is_ic = abs(i - ic_idx) <= step * 2
-        skel_color = QTM_ALERT_COLOR if is_ic else QTM_BONE_COLOR
-        skel_width = 6 if is_ic else BONE_WIDTH
+        skel_color = ALERT_COLOR if is_ic else BONE_COLOR
+        skel_width = 8 if is_ic else BONE_WIDTH
         
         frames.append(go.Frame(
             data=[go.Scatter3d(x=x_f, y=y_f, z=z_f, line=dict(color=skel_color, width=skel_width))],
@@ -206,29 +215,28 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     
     fig.frames = frames
 
-    # --- 🎛️ 终极布局 ---
+    # --- 🎛️ 终极浅色布局 ---
     no_axis_style = dict(
         showbackground=False, showline=False, zeroline=False, 
-        showticklabels=False, title='', showgrid=True, gridcolor='#333333'
+        showticklabels=False, title='', showgrid=True, gridcolor='#e2e8f0' # 淡淡的灰色网格
     )
 
     fig.update_layout(
-        paper_bgcolor=QTM_BG_COLOR, 
+        paper_bgcolor=BG_COLOR, 
         scene=dict(
-            bgcolor=QTM_BG_COLOR,   
-            # 绝对锁定刚性范围
+            bgcolor=BG_COLOR,   
             xaxis=dict(**no_axis_style, range=range_x, autorange=False),
             yaxis=dict(**no_axis_style, range=range_y, autorange=False),
             zaxis=dict(**no_axis_style, range=range_z, autorange=False),
-            aspectmode='cube', # 魔法指令：强制把上面的 XYZ 范围画成正方体！
+            aspectmode='cube', 
             camera=dict(
-                projection=dict(type='orthographic'), # 正交视图，拒绝透视畸变
-                eye=dict(x=1.3, y=1.3, z=0.5)         # 黄金斜侧方机位
+                projection=dict(type='orthographic'), # 正交视图：不畸变不闪烁
+                eye=dict(x=0.9, y=0.9, z=0.4)         # 💡 镜头大幅拉近！视觉占比拉满！
             )
         ),
         updatemenus=[dict(
             type="buttons", showactive=False,
-            font=dict(color="#ffffff"), bgcolor="#333333",          
+            font=dict(color="#2d3436"), bgcolor="#f1f2f6", # 浅灰底，深色字
             y=0, x=-0.05, xanchor="right", yanchor="top",
             buttons=[
                 dict(label="▶ 播放", method="animate", args=[None, dict(frame=dict(duration=30, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
@@ -236,8 +244,8 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
             ]
         )],
         sliders=[dict(
-            currentvalue={"prefix": "当前帧: ", "font": {"color": "#ffffff"}}, 
-            font=dict(color="#aaaaaa"),
+            currentvalue={"prefix": "当前帧: ", "font": {"color": "#2d3436"}}, 
+            font=dict(color="#636e72"),
             y=0, x=0, len=1, xanchor="left", yanchor="top",
             steps=[dict(method='animate', args=[[str(i)], dict(mode='immediate', frame=dict(duration=0, redraw=True), transition=dict(duration=0))], label=str(i)) for i in range(0, total_frames, step)]
         )],
