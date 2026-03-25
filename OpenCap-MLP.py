@@ -120,7 +120,7 @@ model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用
 # 💡 新增：定义 3D 骨架绘制函数
 def create_3d_skeleton_plot(df_trc, ic_idx):
     """
-    使用 Plotly 绘制完整的全身 3D 骨架动画，并包含时间轴滑块
+    使用 Plotly 绘制完整的全身 3D 骨架动画，解决乱码、飞点和黑球缩放问题
     """
     # 1. 依据 single-jumpGR_6_1.trc 真实表头提取的所有核心标记点
     marker_map = {
@@ -132,14 +132,14 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
         "RBigToe": 53, "RHeel": 59
     }
 
-    # 2. 定义身体的分段连接方式（为了动画流畅度，我们把点连成一根连续的线，中间用 None 断开）
+    # 2. 定义身体的分段连接方式
     segments = [
         ["Neck", "midHip"],  # 躯干主轴
         ["LHip", "midHip", "RHip"],  # 骨盆
         ["Neck", "RShoulder", "RElbow", "RWrist"],  # 右臂
         ["Neck", "LShoulder", "LElbow", "LWrist"],  # 左臂
-        ["RHip", "RKnee", "RAnkle", "RHeel", "RBigToe", "RAnkle"],  # 右腿(带脚掌)
-        ["LHip", "LKnee", "LAnkle", "LHeel", "LBigToe", "LAnkle"]   # 左腿(带脚掌)
+        ["RHip", "RKnee", "RAnkle", "RHeel", "RBigToe", "RAnkle"],  # 右腿
+        ["LHip", "LKnee", "LAnkle", "LHeel", "LBigToe", "LAnkle"]   # 左腿
     ]
 
     def get_frame_data(frame_idx):
@@ -147,38 +147,52 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
         for seg in segments:
             for point in seg:
                 col = marker_map[point]
-                # 坐标轴转换：OpenCap(X右, Y上, Z前) -> Plotly(X右, Y前, Z上)
-                x_vals.append(df_trc.iloc[frame_idx, col])
-                y_vals.append(df_trc.iloc[frame_idx, col + 2])
-                z_vals.append(df_trc.iloc[frame_idx, col + 1])
+                # TRC 原始数据可能有缺失值，填补为上一帧或0会引发变形，交给 Plotly 的 None 截断处理
+                x = df_trc.iloc[frame_idx, col]
+                y = df_trc.iloc[frame_idx, col + 2] # 映射到 Plotly 深度 Y
+                z = df_trc.iloc[frame_idx, col + 1] # 映射到 Plotly 高度 Z
+                x_vals.append(x)
+                y_vals.append(y)
+                z_vals.append(z)
             # 插入 None 断开线段
             x_vals.append(None)
             y_vals.append(None)
             z_vals.append(None)
         return x_vals, y_vals, z_vals
 
-    # 3. 初始化基础图层（第0帧）
-    x_init, y_init, z_init = get_frame_data(0)
+    # 3. 初始化基础图层：直接使用 ic_idx 帧（确保有真实动作，而非第0帧的噪点数据）
+    x_init, y_init, z_init = get_frame_data(ic_idx)
     fig = go.Figure(
         data=[go.Scatter3d(
             x=x_init, y=y_init, z=z_init,
             mode='lines+markers',
-            line=dict(color='#008bfb', width=5),
-            marker=dict(size=3, color='#2d3436'),
+            line=dict(color='#ff0051', width=8), # IC 瞬间默认红色加粗
+            marker=dict(size=2, color='#2d3436'), # 把黑色节点缩到极小，不再喧宾夺主
             name="Skeleton"
         )]
     )
 
-    # 4. 生成每一帧的动画数据 (考虑到浏览器性能，这里设定 step=2，即每隔一帧抽取一次，速度和流畅度最佳)
+    # --- 核心修复：基于健康的 ic_idx 帧计算 3D 边界，过滤掉远处的飞点 ---
+    safe_x = [v for v in x_init if v is not None and not np.isnan(v)]
+    safe_y = [v for v in y_init if v is not None and not np.isnan(v)]
+    safe_z = [v for v in z_init if v is not None and not np.isnan(v)]
+    
+    # 给人体周围加上 0.4 米的活动空间缓冲
+    x_range = [min(safe_x) - 0.4, max(safe_x) + 0.4]
+    y_range = [min(safe_y) - 0.4, max(safe_y) + 0.4]
+    z_range = [0, max(safe_z) + 0.4] 
+
+    # 4. 生成每一帧的动画数据
     frames = []
     step = 2
     total_frames = len(df_trc)
     
     for i in range(0, total_frames, step):
         x_f, y_f, z_f = get_frame_data(i)
-        # 如果当前帧接近触地瞬间 (ic_idx)，则高亮为警告红色
-        skel_color = '#ff0051' if abs(i - ic_idx) <= step else '#008bfb'
-        skel_width = 8 if abs(i - ic_idx) <= step else 5
+        # 触地瞬间前后高亮红色，其余用蓝色
+        is_ic = abs(i - ic_idx) <= step * 2
+        skel_color = '#ff0051' if is_ic else '#008bfb'
+        skel_width = 8 if is_ic else 5
         
         frames.append(go.Frame(
             data=[go.Scatter3d(x=x_f, y=y_f, z=z_f, line=dict(color=skel_color, width=skel_width))],
@@ -187,21 +201,12 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     
     fig.frames = frames
 
-    # 5. 计算整个运动过程的物理空间边界（防止播放时镜头乱晃）
-    all_x = df_trc.iloc[:, [marker_map[k] for k in marker_map]].values
-    all_y = df_trc.iloc[:, [marker_map[k]+2 for k in marker_map]].values
-    all_z = df_trc.iloc[:, [marker_map[k]+1 for k in marker_map]].values
-    
-    x_range = [np.nanmin(all_x) - 0.2, np.nanmax(all_x) + 0.2]
-    y_range = [np.nanmin(all_y) - 0.2, np.nanmax(all_y) + 0.2]
-    z_range = [0, np.nanmax(all_z) + 0.2] # 地面 Z=0
-
-    # 6. 配置播放器和滑块 UI
+    # 5. 应用我们计算好的安全边界，并强制锁定物理比例为 1:1:1
     fig.update_layout(
         scene=dict(
-            xaxis=dict(range=x_range, title='X (左右)'),
-            yaxis=dict(range=y_range, title='Y (前后)'),
-            zaxis=dict(range=z_range, title='Z (高度)'),
+            xaxis=dict(title='X (左右)', range=x_range, showgrid=True),
+            yaxis=dict(title='Y (前后)', range=y_range, showgrid=True),
+            zaxis=dict(title='Z (高度)', range=z_range, showgrid=True),
             aspectmode='manual',
             aspectratio=dict(
                 x=(x_range[1]-x_range[0]), 
@@ -225,7 +230,7 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
             steps=[dict(method='animate', args=[[str(i)], dict(mode='immediate', frame=dict(duration=0, redraw=True), transition=dict(duration=0))], label=str(i)) for i in range(0, total_frames, step)]
         )],
         margin=dict(r=0, l=0, b=0, t=30),
-        height=600  # 增加了画布高度，让全身展示更清晰
+        height=550
     )
     return fig
 
