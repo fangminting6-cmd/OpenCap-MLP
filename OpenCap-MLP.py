@@ -150,50 +150,40 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
             z_vals.append(None)
         return x_vals, y_vals, z_vals
 
-    # --- 🛡️ 智能贴身剪裁算法 (让人物尽可能充满屏幕) ---
-    pelvis_col = marker_map["midHip"]
-    neck_col = marker_map["Neck"]
+    # --- ✂️ 极限贴身裁剪算法 ---
+    # 提取所有要画的点的所有数据
+    cols_x = [marker_map[k] for k in marker_map]
+    cols_y = [marker_map[k]+2 for k in marker_map]
+    cols_z = [marker_map[k]+1 for k in marker_map]
     
-    # 提取骨盆(中心点)和脖子(最高点)的数据
-    p_x = pd.to_numeric(df_trc.iloc[:, pelvis_col], errors='coerce').dropna().values
-    p_y = pd.to_numeric(df_trc.iloc[:, pelvis_col + 2], errors='coerce').dropna().values
-    n_z = pd.to_numeric(df_trc.iloc[:, neck_col + 1], errors='coerce').dropna().values
-    
-    # 锁定中心点，忽略极端噪点
-    cx = (np.percentile(p_x, 95) + np.percentile(p_x, 5)) / 2
-    cy = (np.percentile(p_y, 95) + np.percentile(p_y, 5)) / 2
-    
-    # 计算水平移动范围
-    span_x = np.percentile(p_x, 95) - np.percentile(p_x, 5)
-    span_y = np.percentile(p_y, 95) - np.percentile(p_y, 5)
-    
-    # 动态获取人的最大跳跃高度（加上 0.25 米的头部空间缓冲）
-    try:
-        max_height = np.percentile(n_z, 98) + 0.25
-    except:
-        max_height = 1.9 # 保底高度
-    
-    # 完美尺寸：横向留出肢体摆动空间 (加0.6)，纵向刚好包住跳跃最高点
-    box_size = max(span_x + 0.6, span_y + 0.6, max_height) 
+    # 转换为一维数组以计算全局范围
+    all_x = df_trc.iloc[:, cols_x].values.flatten()
+    all_y = df_trc.iloc[:, cols_y].values.flatten()
+    all_z = df_trc.iloc[:, cols_z].values.flatten()
 
-    # 严丝合缝的正方体边界
-    range_x = [cx - box_size/2, cx + box_size/2]
-    range_y = [cy - box_size/2, cy + box_size/2]
-    range_z = [0, box_size] 
+    # 清理掉 NaN 值，防止计算出错
+    all_x = all_x[~np.isnan(all_x)]
+    all_y = all_y[~np.isnan(all_y)]
+    all_z = all_z[~np.isnan(all_z)]
 
-    # --- 🎨 白色清新视觉风格设定 ---
-    BG_COLOR = '#ffffff'           # 纯白背景
-    BONE_COLOR = '#008bfb'         # 清新科技蓝
-    ALERT_COLOR = '#ff0051'        # 警报红
-    BONE_WIDTH = 5                 
+    # 使用 2% 和 98% 分位数，完美过滤掉飞点，同时贴合真实动作边缘
+    # 分别独立计算 X, Y, Z 的极窄边界，只留 0.1 米的极小缝隙防切割
+    range_x = [np.percentile(all_x, 2) - 0.1, np.percentile(all_x, 98) + 0.1]
+    range_y = [np.percentile(all_y, 2) - 0.1, np.percentile(all_y, 98) + 0.1]
+    range_z = [0, np.percentile(all_z, 99) + 0.1] # Z轴底部焊死在 0，顶部贴近头顶
+
+    # --- 🎨 视觉风格设定 ---
+    BG_COLOR = '#ffffff'           
+    BONE_COLOR = '#008bfb'         
+    ALERT_COLOR = '#ff0051'        
 
     x_init, y_init, z_init = get_frame_data(ic_idx)
     fig = go.Figure(
         data=[go.Scatter3d(
             x=x_init, y=y_init, z=z_init,
             mode='lines+markers',
-            line=dict(color=ALERT_COLOR, width=8), 
-            marker=dict(size=3, color='#2d3436'), 
+            line=dict(color=ALERT_COLOR, width=10), # 骨架超级加粗
+            marker=dict(size=4, color='#2d3436'), 
             name="Skeleton"
         )]
     )
@@ -206,7 +196,7 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
         x_f, y_f, z_f = get_frame_data(i)
         is_ic = abs(i - ic_idx) <= step * 2
         skel_color = ALERT_COLOR if is_ic else BONE_COLOR
-        skel_width = 8 if is_ic else BONE_WIDTH
+        skel_width = 10 if is_ic else 6
         
         frames.append(go.Frame(
             data=[go.Scatter3d(x=x_f, y=y_f, z=z_f, line=dict(color=skel_color, width=skel_width))],
@@ -215,28 +205,32 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     
     fig.frames = frames
 
-    # --- 🎛️ 终极浅色布局 ---
+    # --- 🎛️ 终极布局 ---
     no_axis_style = dict(
         showbackground=False, showline=False, zeroline=False, 
-        showticklabels=False, title='', showgrid=True, gridcolor='#e2e8f0' # 淡淡的灰色网格
+        showticklabels=False, title='', showgrid=True, gridcolor='#e2e8f0'
     )
 
     fig.update_layout(
         paper_bgcolor=BG_COLOR, 
         scene=dict(
             bgcolor=BG_COLOR,   
+            # 独立施加 X, Y, Z 的贴身范围
             xaxis=dict(**no_axis_style, range=range_x, autorange=False),
             yaxis=dict(**no_axis_style, range=range_y, autorange=False),
             zaxis=dict(**no_axis_style, range=range_z, autorange=False),
-            aspectmode='cube', 
+            # 💡 最关键的魔法：aspectmode='data'
+            # 这样 Plotly 会保证真实的物理 1:1 比例，但画框会完全贴合上面计算的长方形区域
+            # 导致的结果就是：画面中没有任何多余的白边，人物直接被放大到极限！
+            aspectmode='data', 
             camera=dict(
-                projection=dict(type='orthographic'), # 正交视图：不畸变不闪烁
-                eye=dict(x=0.9, y=0.9, z=0.4)         # 💡 镜头大幅拉近！视觉占比拉满！
+                projection=dict(type='orthographic'), # 正交视图：消除近大远小
+                eye=dict(x=0.7, y=0.7, z=0.3)         # 黄金镜头机位
             )
         ),
         updatemenus=[dict(
             type="buttons", showactive=False,
-            font=dict(color="#2d3436"), bgcolor="#f1f2f6", # 浅灰底，深色字
+            font=dict(color="#2d3436"), bgcolor="#f1f2f6", 
             y=0, x=-0.05, xanchor="right", yanchor="top",
             buttons=[
                 dict(label="▶ 播放", method="animate", args=[None, dict(frame=dict(duration=30, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
