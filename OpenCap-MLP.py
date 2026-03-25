@@ -107,7 +107,7 @@ def get_opencap_token():
 # ===================== 2. Streamlit 页面配置 =====================
 st.set_page_config(page_title="ACL 损伤风险预测", layout="wide")
 
-st.title("🏃‍♂️ ACL损伤风险快速筛查系统")
+st.title("🏃‍♂️ 膝关节损伤风险快速筛查系统")
 
 # 侧边栏配置
 st.sidebar.header("⚙️ 配置参数")
