@@ -120,9 +120,8 @@ model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用
 # 💡 新增：定义 3D 骨架绘制函数
 def create_3d_skeleton_plot(df_trc, ic_idx):
     """
-    使用 Plotly 绘制完整的全身 3D 骨架动画，强制采用正方体视口充满屏幕
+    使用 Plotly 绘制完整的全身 3D 骨架动画，紧凑视口，人物超大超清晰！
     """
-    # 1. 核心标记点映射
     marker_map = {
         "Neck": 2, "RShoulder": 5, "RElbow": 8, "RWrist": 11,
         "LShoulder": 14, "LElbow": 17, "LWrist": 20,
@@ -132,14 +131,13 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
         "RBigToe": 53, "RHeel": 59
     }
 
-    # 2. 定义身体的分段连接方式
     segments = [
-        ["Neck", "midHip"],  # 躯干主轴
-        ["LHip", "midHip", "RHip"],  # 骨盆
-        ["Neck", "RShoulder", "RElbow", "RWrist"],  # 右臂
-        ["Neck", "LShoulder", "LElbow", "LWrist"],  # 左臂
-        ["RHip", "RKnee", "RAnkle", "RHeel", "RBigToe", "RAnkle"],  # 右腿
-        ["LHip", "LKnee", "LAnkle", "LHeel", "LBigToe", "LAnkle"]   # 左腿
+        ["Neck", "midHip"],  
+        ["LHip", "midHip", "RHip"],  
+        ["Neck", "RShoulder", "RElbow", "RWrist"],  
+        ["Neck", "LShoulder", "LElbow", "LWrist"],  
+        ["RHip", "RKnee", "RAnkle", "RHeel", "RBigToe", "RAnkle"],  
+        ["LHip", "LKnee", "LAnkle", "LHeel", "LBigToe", "LAnkle"]   
     ]
 
     def get_frame_data(frame_idx):
@@ -155,42 +153,33 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
             z_vals.append(None)
         return x_vals, y_vals, z_vals
 
-    # 3. 初始化画面：直接锁定在最危险的触地瞬间 (IC)
+    # --- 🌟 核心修复：计算整个跳跃动作的【极度贴身】边界 ---
+    # 提取所有要画的列
+    cols_x = [marker_map[k] for k in marker_map]
+    cols_y = [marker_map[k]+2 for k in marker_map]
+    cols_z = [marker_map[k]+1 for k in marker_map]
+    
+    all_x = df_trc.iloc[:, cols_x].values
+    all_y = df_trc.iloc[:, cols_y].values
+    all_z = df_trc.iloc[:, cols_z].values
+
+    # 找出绝对的最小和最大值（只加 0.15 米的极小缓冲，拒绝空旷！）
+    x_range = [np.nanmin(all_x) - 0.15, np.nanmax(all_x) + 0.15]
+    y_range = [np.nanmin(all_y) - 0.15, np.nanmax(all_y) + 0.15]
+    z_range = [0, np.nanmax(all_z) + 0.15] # 脚踩实地
+
+    # 初始化画面
     x_init, y_init, z_init = get_frame_data(ic_idx)
     fig = go.Figure(
         data=[go.Scatter3d(
             x=x_init, y=y_init, z=z_init,
             mode='lines+markers',
-            line=dict(color='#ff0051', width=8), 
-            marker=dict(size=3, color='#2d3436'), 
+            line=dict(color='#ff0051', width=12), # 骨架超级加粗！
+            marker=dict(size=5, color='#2d3436'), 
             name="Skeleton"
         )]
     )
 
-    # --- 🌟 核心修复：构建“正方体着陆区”视口 ---
-    safe_x = [v for v in x_init if v is not None and not np.isnan(v)]
-    safe_y = [v for v in y_init if v is not None and not np.isnan(v)]
-    safe_z = [v for v in z_init if v is not None and not np.isnan(v)]
-
-    # 找到着地瞬间人物的中心点
-    mid_x = (max(safe_x) + min(safe_x)) / 2
-    mid_y = (max(safe_y) + min(safe_y)) / 2
-    max_z = max(safe_z)
-
-    # 找出最大的身体跨度（通常是身高，大概 1.8米 左右）
-    spread_x = max(safe_x) - min(safe_x)
-    spread_y = max(safe_y) - min(safe_y)
-    max_spread = max(spread_x, spread_y, max_z)
-    
-    # 强制将 3D 盒子变成一个正方体 (边长为身高加一点点呼吸空间)
-    box_size = max_spread * 1.15
-
-    # 设定长、宽、高完全相等的边界
-    x_range = [mid_x - box_size/2, mid_x + box_size/2]
-    y_range = [mid_y - box_size/2, mid_y + box_size/2]
-    z_range = [0, box_size]  # 假设脚底大概在 0 的位置
-
-    # 4. 生成每一帧的动画数据
     frames = []
     step = 2
     total_frames = len(df_trc)
@@ -199,7 +188,7 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
         x_f, y_f, z_f = get_frame_data(i)
         is_ic = abs(i - ic_idx) <= step * 2
         skel_color = '#ff0051' if is_ic else '#008bfb'
-        skel_width = 8 if is_ic else 5
+        skel_width = 12 if is_ic else 8  # 整体加粗
         
         frames.append(go.Frame(
             data=[go.Scatter3d(x=x_f, y=y_f, z=z_f, line=dict(color=skel_color, width=skel_width))],
@@ -208,15 +197,16 @@ def create_3d_skeleton_plot(df_trc, ic_idx):
     
     fig.frames = frames
 
-    # 5. 配置布局
+    # 配置布局
     fig.update_layout(
         scene=dict(
-            xaxis=dict(title='X (左右)', range=x_range, showgrid=True),
-            yaxis=dict(title='Y (前后)', range=y_range, showgrid=True),
-            zaxis=dict(title='Z (高度)', range=z_range, showgrid=True),
-            aspectmode='cube',  # 👈 魔法就在这：强制 3D 空间为正方体，撑满屏幕！
+            # 必须加 autorange=False，死死锁住这个小框，不让它乱变
+            xaxis=dict(title='X (左右)', range=x_range, autorange=False, showgrid=True),
+            yaxis=dict(title='Y (前后)', range=y_range, autorange=False, showgrid=True),
+            zaxis=dict(title='Z (高度)', range=z_range, autorange=False, showgrid=True),
+            aspectmode='data',  # 👈 魔法就在这：物理比例1:1，且边框完全按数据的长宽高贴紧！
             camera=dict(
-                eye=dict(x=1.3, y=1.3, z=0.6)  # 默认给一个能看清侧面和正面的黄金视角
+                eye=dict(x=0.8, y=1.0, z=0.4)  # 👈 镜头拉近！怼着侧面/半正面看！
             )
         ),
         updatemenus=[dict(
