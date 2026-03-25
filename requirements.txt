@@ -10,3 +10,4 @@ xgboost
 imbalanced-learn
 python-decouple
 maskpass
+plotly
