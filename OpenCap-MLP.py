@@ -120,58 +120,112 @@ model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用
 # 💡 新增：定义 3D 骨架绘制函数
 def create_3d_skeleton_plot(df_trc, ic_idx):
     """
-    使用 Plotly 绘制触地瞬间(IC)的 3D 骨架
+    使用 Plotly 绘制完整的全身 3D 骨架动画，并包含时间轴滑块
     """
-    def get_coords(col_start_idx, frame):
-        # 从 df_trc 获取 XYZ 坐标。
-        # OpenCap 系统的 Y 轴通常是垂直向上的，为了在 Plotly 中看着符合直觉，
-        # 我们把坐标轴映射为: Plotly_X = 左右, Plotly_Y = 前后(Z), Plotly_Z = 上下(Y)
-        x = df_trc.iloc[frame, col_start_idx]
-        y = df_trc.iloc[frame, col_start_idx + 2] 
-        z = df_trc.iloc[frame, col_start_idx + 1] 
-        return x, y, z
-
-    # ✅ 已经根据 single-jumpGR_6_1.trc 的表头精准计算出的真实索引
+    # 1. 依据 single-jumpGR_6_1.trc 真实表头提取的所有核心标记点
     marker_map = {
-        "Pelvis": 23,   # midHip
-        "RHip": 26,     # RHip
-        "RKnee": 29,    # RKnee
-        "RAnkle": 32,   # RAnkle
-        "RToe": 53      # RBigToe
+        "Neck": 2, "RShoulder": 5, "RElbow": 8, "RWrist": 11,
+        "LShoulder": 14, "LElbow": 17, "LWrist": 20,
+        "midHip": 23, "RHip": 26, "RKnee": 29, "RAnkle": 32,
+        "LHip": 35, "LKnee": 38, "LAnkle": 41,
+        "LBigToe": 44, "LHeel": 50, 
+        "RBigToe": 53, "RHeel": 59
     }
 
-    fig = go.Figure()
+    # 2. 定义身体的分段连接方式（为了动画流畅度，我们把点连成一根连续的线，中间用 None 断开）
+    segments = [
+        ["Neck", "midHip"],  # 躯干主轴
+        ["LHip", "midHip", "RHip"],  # 骨盆
+        ["Neck", "RShoulder", "RElbow", "RWrist"],  # 右臂
+        ["Neck", "LShoulder", "LElbow", "LWrist"],  # 左臂
+        ["RHip", "RKnee", "RAnkle", "RHeel", "RBigToe", "RAnkle"],  # 右腿(带脚掌)
+        ["LHip", "LKnee", "LAnkle", "LHeel", "LBigToe", "LAnkle"]   # 左腿(带脚掌)
+    ]
 
-    # 绘制下肢骨骼连线 (骨盆 -> 髋 -> 膝 -> 踝 -> 脚尖)
-    bones = [("Pelvis", "RHip"), ("RHip", "RKnee"), ("RKnee", "RAnkle"), ("RAnkle", "RToe")]
+    def get_frame_data(frame_idx):
+        x_vals, y_vals, z_vals = [], [], []
+        for seg in segments:
+            for point in seg:
+                col = marker_map[point]
+                # 坐标轴转换：OpenCap(X右, Y上, Z前) -> Plotly(X右, Y前, Z上)
+                x_vals.append(df_trc.iloc[frame_idx, col])
+                y_vals.append(df_trc.iloc[frame_idx, col + 2])
+                z_vals.append(df_trc.iloc[frame_idx, col + 1])
+            # 插入 None 断开线段
+            x_vals.append(None)
+            y_vals.append(None)
+            z_vals.append(None)
+        return x_vals, y_vals, z_vals
+
+    # 3. 初始化基础图层（第0帧）
+    x_init, y_init, z_init = get_frame_data(0)
+    fig = go.Figure(
+        data=[go.Scatter3d(
+            x=x_init, y=y_init, z=z_init,
+            mode='lines+markers',
+            line=dict(color='#008bfb', width=5),
+            marker=dict(size=3, color='#2d3436'),
+            name="Skeleton"
+        )]
+    )
+
+    # 4. 生成每一帧的动画数据 (考虑到浏览器性能，这里设定 step=2，即每隔一帧抽取一次，速度和流畅度最佳)
+    frames = []
+    step = 2
+    total_frames = len(df_trc)
     
-    for start, end in bones:
-        try:
-            x1, y1, z1 = get_coords(marker_map[start], ic_idx)
-            x2, y2, z2 = get_coords(marker_map[end], ic_idx)
-            
-            fig.add_trace(go.Scatter3d(
-                x=[x1, x2], y=[y1, y2], z=[z1, z2],
-                mode='lines+markers',
-                line=dict(color='#ff0051', width=8), # 红色高亮触地瞬间
-                marker=dict(size=6, color='#2d3436'),
-                hoverinfo='name',
-                name=f"{start}-{end}"
-            ))
-        except Exception:
-            pass # 如果有任何数据缺失则忽略
+    for i in range(0, total_frames, step):
+        x_f, y_f, z_f = get_frame_data(i)
+        # 如果当前帧接近触地瞬间 (ic_idx)，则高亮为警告红色
+        skel_color = '#ff0051' if abs(i - ic_idx) <= step else '#008bfb'
+        skel_width = 8 if abs(i - ic_idx) <= step else 5
+        
+        frames.append(go.Frame(
+            data=[go.Scatter3d(x=x_f, y=y_f, z=z_f, line=dict(color=skel_color, width=skel_width))],
+            name=str(i)
+        ))
+    
+    fig.frames = frames
 
-    # 设置 3D 场景比例和视角
+    # 5. 计算整个运动过程的物理空间边界（防止播放时镜头乱晃）
+    all_x = df_trc.iloc[:, [marker_map[k] for k in marker_map]].values
+    all_y = df_trc.iloc[:, [marker_map[k]+2 for k in marker_map]].values
+    all_z = df_trc.iloc[:, [marker_map[k]+1 for k in marker_map]].values
+    
+    x_range = [np.nanmin(all_x) - 0.2, np.nanmax(all_x) + 0.2]
+    y_range = [np.nanmin(all_y) - 0.2, np.nanmax(all_y) + 0.2]
+    z_range = [0, np.nanmax(all_z) + 0.2] # 地面 Z=0
+
+    # 6. 配置播放器和滑块 UI
     fig.update_layout(
         scene=dict(
-            xaxis=dict(title='X (左右)', showgrid=True),
-            yaxis=dict(title='Y (前后)', showgrid=True),
-            zaxis=dict(title='Z (垂直高度)', showgrid=True),
-            aspectmode='data' # 强制 1:1:1 真实物理比例，防止拉伸变形
+            xaxis=dict(range=x_range, title='X (左右)'),
+            yaxis=dict(range=y_range, title='Y (前后)'),
+            zaxis=dict(range=z_range, title='Z (高度)'),
+            aspectmode='manual',
+            aspectratio=dict(
+                x=(x_range[1]-x_range[0]), 
+                y=(y_range[1]-y_range[0]), 
+                z=(z_range[1]-z_range[0])
+            )
         ),
-        margin=dict(r=0, l=0, b=0, t=0),
-        showlegend=False,
-        height=450
+        updatemenus=[dict(
+            type="buttons", showactive=False,
+            y=0, x=-0.1, xanchor="right", yanchor="top",
+            buttons=[
+                dict(label="▶ 播放", method="animate",
+                     args=[None, dict(frame=dict(duration=30, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
+                dict(label="⏸ 暂停", method="animate",
+                     args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate", transition=dict(duration=0))])
+            ]
+        )],
+        sliders=[dict(
+            currentvalue={"prefix": "当前帧: "},
+            y=0, x=0, len=1, xanchor="left", yanchor="top",
+            steps=[dict(method='animate', args=[[str(i)], dict(mode='immediate', frame=dict(duration=0, redraw=True), transition=dict(duration=0))], label=str(i)) for i in range(0, total_frames, step)]
+        )],
+        margin=dict(r=0, l=0, b=0, t=30),
+        height=600  # 增加了画布高度，让全身展示更清晰
     )
     return fig
 
@@ -323,13 +377,12 @@ def run_analysis(sid, keyword, model_obj):
             
         with col_info:
             st.info(f"""
-            **📍 当前分析帧**: 第 {ic_idx + 1} 帧 (触地瞬间 Initial Contact)
+            **📍 触地瞬间 (IC) 定位**: 第 {ic_idx + 1} 帧
             
-            **🔬 观察重点**:
-            * **正面观**：右膝 (RKnee) 是否偏向内侧（膝外翻 / 髋内收过大）。
-            * **侧面观**：右膝 (RKnee) 的弯曲角度 (KFA) 是否过于笔直（缓冲不足）。
-            
-            *(你可以使用鼠标左键拖拽旋转模型，滚轮缩放查看细节)*
+            **🔬 动态观察指南**:
+            1. 点击下方 **▶ 播放** 按钮，观看全身跳跃力学传导全过程。
+            2. 动画变为 **红色** 的瞬间，即为系统抓取的触地高危时刻。
+            3. 你可以随时暂停，用鼠标旋转视角，观察躯干是否偏移，以及双膝是否在落地时产生内扣。
             """)
         st.divider()
         # =========================================================
