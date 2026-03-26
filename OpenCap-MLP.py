@@ -196,7 +196,7 @@ def create_3d_skeleton_plot(df_trc, df_mot, ic_idx):
         x=lx_init, y=ly_init, z=lz_init, mode='text+markers',
         text=lt_init, textposition="top center",
         textfont=dict(family="Arial Black", size=12, color="#ff0051"),
-        marker=dict(size=4, color="#ff0051"), name="Joint Angles"
+        marker=dict(size=2, color="#ff0051"), name="Joint Angles"
     ))
 
     # --- 4. 构建动画帧 ---
