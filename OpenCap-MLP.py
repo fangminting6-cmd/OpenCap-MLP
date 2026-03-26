@@ -118,7 +118,7 @@ model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用
 
 # ===================== 3. 核心分析逻辑 =====================
 # 💡 新增：定义 3D 骨架绘制函数
-def create_3d_skeleton_plot(df_trc, df_mot, ic_idx): 
+def create_3d_skeleton_plot(df_trc, df_mot, ic_idx):
     marker_map = {
         "Neck": 2, "RShoulder": 5, "RElbow": 8, "RWrist": 11,
         "LShoulder": 14, "LElbow": 17, "LWrist": 20,
@@ -137,27 +137,6 @@ def create_3d_skeleton_plot(df_trc, df_mot, ic_idx):
         ["LHip", "LKnee", "LAnkle", "LHeel", "LBigToe", "LAnkle"]   
     ]
 
-    # --- 辅助函数：提取每一帧的角度标签数据 ---
-    def get_label_data(frame_idx):
-        # 我们挑选右腿的关键关节展示，保持画面整洁
-        labels = {
-            "RKnee": "knee_angle_r",
-            "RHip": "hip_flexion_r",
-            "RAnkle": "ankle_angle_r"
-        }
-        lx, ly, lz, texts = [], [], [], []
-        for joint, mot_col in labels.items():
-            if mot_col in df_mot.columns:
-                col = marker_map[joint]
-                lx.append(df_trc.iloc[frame_idx, col])
-                ly.append(df_trc.iloc[frame_idx, col + 2])
-                lz.append(df_trc.iloc[frame_idx, col + 1])
-                val = df_mot.iloc[frame_idx][mot_col]
-                # 简化标签名展示
-                short_name = "Knee" if "knee" in mot_col else ("Hip" if "hip" in mot_col else "Ankle")
-                texts.append(f"{short_name}: {val:.1f}°")
-        return lx, ly, lz, texts
-
     def get_frame_data(frame_idx):
         x_vals, y_vals, z_vals = [], [], []
         for seg in segments:
@@ -166,75 +145,128 @@ def create_3d_skeleton_plot(df_trc, df_mot, ic_idx):
                 x_vals.append(df_trc.iloc[frame_idx, col])
                 y_vals.append(df_trc.iloc[frame_idx, col + 2])
                 z_vals.append(df_trc.iloc[frame_idx, col + 1])
-            x_vals.append(None); y_vals.append(None); z_vals.append(None)
+            x_vals.append(None)
+            y_vals.append(None)
+            z_vals.append(None)
         return x_vals, y_vals, z_vals
 
-    # 布局计算保持不变...
+    def get_label_data(frame_idx):
+        label_joints = ["RKnee", "RHip", "RAnkle"]
+        mot_columns = ["knee_angle_r", "hip_flexion_r", "ankle_angle_r"]
+        lx, ly, lz, texts = [], [], [], []
+        for joint, col_name in zip(label_joints, mot_columns):
+            col = marker_map[joint]
+            lx.append(df_trc.iloc[frame_idx, col])
+            ly.append(df_trc.iloc[frame_idx, col + 2])
+            lz.append(df_trc.iloc[frame_idx, col + 1])
+            val = df_mot.iloc[frame_idx].get(col_name, 0)
+            texts.append(f"{val:.1f}°")
+        return lx, ly, lz, texts
+
+    # --- 布局与范围计算 ---
     pelvis_col = marker_map["midHip"]
     p_x = pd.to_numeric(df_trc.iloc[:, pelvis_col], errors='coerce').dropna().values
     p_y = pd.to_numeric(df_trc.iloc[:, pelvis_col + 2], errors='coerce').dropna().values
     cx, cy = (np.percentile(p_x, 95) + np.percentile(p_x, 5)) / 2, (np.percentile(p_y, 95) + np.percentile(p_y, 5)) / 2
     box_size = 1.8 
+    range_x, range_y, range_z = [cx - box_size/2, cx + box_size/2], [cy - box_size/2, cy + box_size/2], [0, box_size]
 
-    # --- 初始数据 (IC 瞬间) ---
+    # --- 初始数据 ---
     x_init, y_init, z_init = get_frame_data(ic_idx)
     lx_init, ly_init, lz_init, lt_init = get_label_data(ic_idx)
 
     fig = go.Figure()
 
-    # 轨迹 1：骨骼线条
+    # 轨迹 1：骨架线
     fig.add_trace(go.Scatter3d(
-        x=x_init, y=y_init, z=z_init, mode='lines+markers',
-        line=dict(color='#ff0051', width=8), marker=dict(size=3, color='#2d3436'), name="Skeleton"
+        x=x_init, y=y_init, z=z_init,
+        mode='lines+markers',
+        line=dict(color='#ff0051', width=5), # 初始显示IC瞬间颜色
+        marker=dict(size=2, color='#2d3436'),
+        name="Skeleton"
     ))
 
-    # 轨迹 2：实时角度监测 (新加)
+    # 轨迹 2：实时角度标签层
     fig.add_trace(go.Scatter3d(
-        x=lx_init, y=ly_init, z=lz_init, mode='text+markers',
-        text=lt_init, textposition="top center",
-        textfont=dict(family="Arial", size=12, color="#ff0051"),
-        marker=dict(size=5, color="#ff0051"), name="Joint Monitoring"
+        x=lx_init, y=ly_init, z=lz_init,
+        mode='text+markers',
+        text=lt_init,
+        textposition="top center",
+        textfont=dict(family="Arial Black", size=14, color="#ff0051"),
+        marker=dict(size=4, color="#ff0051", symbol='circle'),
+        name="Joint Angles"
     ))
 
+    # --- 构建动画帧 ---
     frames = []
     step = 2
-    for i in range(0, len(df_trc), step):
+    total_frames = len(df_trc)
+    for i in range(0, total_frames, step):
         xf, yf, zf = get_frame_data(i)
         lxf, lyf, lzf, ltf = get_label_data(i)
-        is_ic = abs(i - ic_idx) <= step * 2
+        is_ic = abs(i - ic_idx) <= step
         color = '#ff0051' if is_ic else '#008bfb'
         
         frames.append(go.Frame(
             data=[
-                go.Scatter3d(x=xf, y=yf, z=zf, line=dict(color=color, width=8 if is_ic else 5)),
-                go.Scatter3d(x=lxf, y=lyf, z=lzf, text=ltf) # 同步更新监测数值
+                go.Scatter3d(x=xf, y=yf, z=zf, line=dict(color=color)),
+                go.Scatter3d(x=lxf, y=lyf, z=lzf, text=ltf)
             ],
-            name=str(i)
+            name=str(i) # 这里的 name 必须与 slider 中的 label 对应
         ))
     
     fig.frames = frames
 
-    # 布局配置保持原有视觉风格
+    # --- 核心修改：配置 播放、暂停 和 进度条 ---
     fig.update_layout(
-        paper_bgcolor='#ffffff',
+        paper_bgcolor='white',
         scene=dict(
-            bgcolor='#ffffff',
-            xaxis=dict(showbackground=False, showticklabels=False, title='', range=[cx-0.9, cx+0.9]),
-            yaxis=dict(showbackground=False, showticklabels=False, title='', range=[cy-0.9, cy+0.9]),
-            zaxis=dict(showbackground=False, showticklabels=False, title='', range=[0, 1.8]),
+            xaxis=dict(range=range_x, showticklabels=False, title=''),
+            yaxis=dict(range=range_y, showticklabels=False, title=''),
+            zaxis=dict(range=range_z, showticklabels=False, title=''),
             aspectmode='cube',
-            camera=dict(eye=dict(x=0.9, y=0.9, z=0.4))
+            camera=dict(eye=dict(x=1.2, y=1.2, z=0.6))
         ),
+        margin=dict(r=0, l=0, b=0, t=0),
+        
+        # 1. 添加播放和暂停按钮
         updatemenus=[dict(
-            type="buttons", showactive=False, y=0, x=-0.05,
+            type="buttons",
+            showactive=False,
+            x=0.1, y=0,
+            xanchor="right", yanchor="top",
+            direction="left",
+            pad={"r": 10, "t": 70},
             buttons=[
-                dict(label="▶ 播放", method="animate", args=[None, dict(frame=dict(duration=30))]),
-                dict(label="⏸ 暂停", method="animate", args=[[None], dict(frame=dict(duration=0))])
+                dict(
+                    label="▶ 播放",
+                    method="animate",
+                    args=[None, dict(frame=dict(duration=30, redraw=True), fromcurrent=True, mode="immediate")]
+                ),
+                dict(
+                    label="⏸ 暂停",
+                    method="animate",
+                    args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")]
+                )
             ]
         )],
-        sliders=[dict(y=0, x=0, len=1, steps=[dict(method='animate', args=[[str(i)]], label=str(i)) for i in range(0, len(df_trc), step)])],
-        margin=dict(r=0, l=0, b=0, t=0), height=600
+        
+        # 2. 添加进度条滑块
+        sliders=[dict(
+            active=0,
+            x=0.1, y=0,
+            len=0.9,
+            xanchor="left", yanchor="top",
+            pad={"b": 10, "t": 50},
+            currentvalue=dict(font=dict(size=12), prefix="帧数: ", visible=True, xanchor="right"),
+            steps=[dict(
+                method="animate",
+                args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=True))],
+                label=str(i)
+            ) for i in range(0, total_frames, step)]
+        )]
     )
+    
     return fig
 
 def run_analysis(sid, keyword, model_obj):
