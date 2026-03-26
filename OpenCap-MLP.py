@@ -137,6 +137,26 @@ def create_3d_skeleton_plot(df_trc, df_mot, ic_idx):
         ["LHip", "LKnee", "LAnkle", "LHeel", "LBigToe", "LAnkle"]   
     ]
 
+    # --- 1. 动态范围计算 (修复上半身消失的关键) ---
+    # 提取所有标记点在所有时刻的垂直高度 (TRC数据的第2列是Y轴，即Plotly的Z轴)
+    z_cols = [marker_map[m] + 1 for m in marker_map]
+    all_z_data = pd.to_numeric(df_trc.iloc[:, z_cols].values.flatten(), errors='coerce')
+    max_height_reached = np.nanmax(all_z_data) 
+    
+    # 自动中心点定位 (基于骨盆水平轨迹)
+    pelvis_x = pd.to_numeric(df_trc.iloc[:, marker_map["midHip"]], errors='coerce').dropna().values
+    pelvis_y = pd.to_numeric(df_trc.iloc[:, marker_map["midHip"] + 2], errors='coerce').dropna().values
+    cx = (np.percentile(pelvis_x, 95) + np.percentile(pelvis_x, 5)) / 2
+    cy = (np.percentile(pelvis_y, 95) + np.percentile(pelvis_y, 5)) / 2
+
+    # 动态设定盒子大小：取 (最高点+0.3米缓冲) 或 (保底1.8米)
+    box_size = max(1.8, max_height_reached + 0.3) 
+    
+    range_x = [cx - box_size/2, cx + box_size/2]
+    range_y = [cy - box_size/2, cy + box_size/2]
+    range_z = [0, box_size] 
+
+    # --- 2. 帧数据提取函数 ---
     def get_frame_data(frame_idx):
         x_vals, y_vals, z_vals = [], [], []
         for seg in segments:
@@ -145,9 +165,7 @@ def create_3d_skeleton_plot(df_trc, df_mot, ic_idx):
                 x_vals.append(df_trc.iloc[frame_idx, col])
                 y_vals.append(df_trc.iloc[frame_idx, col + 2])
                 z_vals.append(df_trc.iloc[frame_idx, col + 1])
-            x_vals.append(None)
-            y_vals.append(None)
-            z_vals.append(None)
+            x_vals.append(None); y_vals.append(None); z_vals.append(None)
         return x_vals, y_vals, z_vals
 
     def get_label_data(frame_idx):
@@ -163,41 +181,25 @@ def create_3d_skeleton_plot(df_trc, df_mot, ic_idx):
             texts.append(f"{val:.1f}°")
         return lx, ly, lz, texts
 
-    # --- 布局与范围计算 ---
-    pelvis_col = marker_map["midHip"]
-    p_x = pd.to_numeric(df_trc.iloc[:, pelvis_col], errors='coerce').dropna().values
-    p_y = pd.to_numeric(df_trc.iloc[:, pelvis_col + 2], errors='coerce').dropna().values
-    cx, cy = (np.percentile(p_x, 95) + np.percentile(p_x, 5)) / 2, (np.percentile(p_y, 95) + np.percentile(p_y, 5)) / 2
-    box_size = 1.8 
-    range_x, range_y, range_z = [cx - box_size/2, cx + box_size/2], [cy - box_size/2, cy + box_size/2], [0, box_size]
-
-    # --- 初始数据 ---
+    # --- 3. 初始化图表 ---
     x_init, y_init, z_init = get_frame_data(ic_idx)
     lx_init, ly_init, lz_init, lt_init = get_label_data(ic_idx)
 
     fig = go.Figure()
 
-    # 轨迹 1：骨架线
     fig.add_trace(go.Scatter3d(
-        x=x_init, y=y_init, z=z_init,
-        mode='lines+markers',
-        line=dict(color='#ff0051', width=5), # 初始显示IC瞬间颜色
-        marker=dict(size=2, color='#2d3436'),
-        name="Skeleton"
+        x=x_init, y=y_init, z=z_init, mode='lines+markers',
+        line=dict(color='#ff0051', width=5), marker=dict(size=2, color='#2d3436'), name="Skeleton"
     ))
 
-    # 轨迹 2：实时角度标签层
     fig.add_trace(go.Scatter3d(
-        x=lx_init, y=ly_init, z=lz_init,
-        mode='text+markers',
-        text=lt_init,
-        textposition="top center",
-        textfont=dict(family="Arial Black", size=14, color="#ff0051"),
-        marker=dict(size=4, color="#ff0051", symbol='circle'),
-        name="Joint Angles"
+        x=lx_init, y=ly_init, z=lz_init, mode='text+markers',
+        text=lt_init, textposition="top center",
+        textfont=dict(family="Arial Black", size=12, color="#ff0051"),
+        marker=dict(size=4, color="#ff0051"), name="Joint Angles"
     ))
 
-    # --- 构建动画帧 ---
+    # --- 4. 构建动画帧 ---
     frames = []
     step = 2
     total_frames = len(df_trc)
@@ -212,58 +214,35 @@ def create_3d_skeleton_plot(df_trc, df_mot, ic_idx):
                 go.Scatter3d(x=xf, y=yf, z=zf, line=dict(color=color)),
                 go.Scatter3d(x=lxf, y=lyf, z=lzf, text=ltf)
             ],
-            name=str(i) # 这里的 name 必须与 slider 中的 label 对应
+            name=str(i)
         ))
-    
     fig.frames = frames
 
-    # --- 核心修改：配置 播放、暂停 和 进度条 ---
+    # --- 5. 交互控件：播放、暂停、进度条 ---
     fig.update_layout(
         paper_bgcolor='white',
         scene=dict(
-            xaxis=dict(range=range_x, showticklabels=False, title=''),
-            yaxis=dict(range=range_y, showticklabels=False, title=''),
-            zaxis=dict(range=range_z, showticklabels=False, title=''),
+            xaxis=dict(range=range_x, showticklabels=False, title='', showgrid=True, gridcolor='#f0f0f0'),
+            yaxis=dict(range=range_y, showticklabels=False, title='', showgrid=True, gridcolor='#f0f0f0'),
+            zaxis=dict(range=range_z, showticklabels=False, title='', showgrid=True, gridcolor='#f0f0f0'),
             aspectmode='cube',
             camera=dict(eye=dict(x=1.2, y=1.2, z=0.6))
         ),
         margin=dict(r=0, l=0, b=0, t=0),
-        
-        # 1. 添加播放和暂停按钮
         updatemenus=[dict(
-            type="buttons",
-            showactive=False,
-            x=0.1, y=0,
-            xanchor="right", yanchor="top",
-            direction="left",
-            pad={"r": 10, "t": 70},
+            type="buttons", showactive=False, x=0.05, y=0, xanchor="right", yanchor="top",
+            pad={"t": 60},
             buttons=[
-                dict(
-                    label="▶ 播放",
-                    method="animate",
-                    args=[None, dict(frame=dict(duration=30, redraw=True), fromcurrent=True, mode="immediate")]
-                ),
-                dict(
-                    label="⏸ 暂停",
-                    method="animate",
-                    args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")]
-                )
+                dict(label="▶ 播放", method="animate", args=[None, dict(frame=dict(duration=30, redraw=True), fromcurrent=True)]),
+                dict(label="⏸ 暂停", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")])
             ]
         )],
-        
-        # 2. 添加进度条滑块
         sliders=[dict(
-            active=0,
-            x=0.1, y=0,
-            len=0.9,
-            xanchor="left", yanchor="top",
-            pad={"b": 10, "t": 50},
-            currentvalue=dict(font=dict(size=12), prefix="帧数: ", visible=True, xanchor="right"),
-            steps=[dict(
-                method="animate",
-                args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=True))],
-                label=str(i)
-            ) for i in range(0, total_frames, step)]
+            active=0, x=0.07, y=0, len=0.9, xanchor="left", yanchor="top",
+            pad={"t": 50},
+            currentvalue=dict(font=dict(size=12), prefix="当前帧: ", visible=True, xanchor="right"),
+            steps=[dict(method="animate", args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=True))], label=str(i)) 
+                   for i in range(0, total_frames, step)]
         )]
     )
     
