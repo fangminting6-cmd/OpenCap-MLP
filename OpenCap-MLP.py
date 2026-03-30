@@ -356,7 +356,7 @@ def run_analysis(sid, keyword, model_obj):
         
         # 💡 3. 总体风险判定：只要有一个指标超标，总体动作就判定为“高风险”
         is_overall_risk = is_acl_risk or is_knee_risk
-        overall_text = "🚨 总体高风险" if is_overall_risk else "✅ 总体低风险"
+        overall_text = "🚨 高风险" if is_overall_risk else "✅ 低风险"
         overall_color = "#d63031" if is_overall_risk else "#27ae60"
 
         # 调整为 3 列，展示指标的同时加上超标警告小标签
