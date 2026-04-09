@@ -111,8 +111,8 @@ st.title("🏃‍♂️ 膝关节损伤风险快速筛查系统")
 
 # 侧边栏配置
 st.sidebar.header("⚙️ 配置参数")
-session_id = st.sidebar.text_input("Session ID", value="995d44f9-022a-449b-9dd2-2424318c3f54")
-trial_keyword = st.sidebar.text_input("动作试次名称", value="single-jumpGR_6_1")
+session_id = st.sidebar.text_input("Session ID", value="796e323f-5dab-4a70-a36c-3bd4784304df")
+trial_keyword = st.sidebar.text_input("动作试次名称", value="jump02")
 # 修改点：将上传组件设为可选，不再是必填项
 model_file = st.sidebar.file_uploader("上传自定义模型 (不上传则使用内置默认模型)", type=["pkl"])
 
