@@ -254,7 +254,7 @@ def run_analysis(sid, keyword, model_obj):
             st.write("正在获取身份令牌...")
             token = get_opencap_token()
             
-            st.write("正在从 OpenCap 下载 Session 数据...")
+            st.write("正在从 无标记动作捕捉后台 下载 Session 数据...")
             headers = {"Authorization": f"Token {token}"}
             url = f"https://api.opencap.ai/sessions/{sid}/download/"
             
@@ -585,4 +585,4 @@ if st.button("🚀 开始自动化分析", use_container_width=True):
         st.error(f"⚠️ 找不到模型文件！请上传 .pkl 文件或确保仓库中存在 {DEFAULT_MODEL_NAME}")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Powered by OpenCap & MLP Model")
+st.sidebar.caption("Powered by MotCap & XGB Model")
